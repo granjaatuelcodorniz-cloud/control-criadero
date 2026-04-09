@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 import Header from '@/components/Header';
 
@@ -12,11 +12,13 @@ function Counter({
   onChange,
 }: {
   label: string;
-  value: number;
+  value: number | null;
   onChange: (v: number) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [raw, setRaw] = useState('');
+
+  const display = value === null ? '' : String(value);
 
   return (
     <div className="flex flex-col gap-2">
@@ -24,8 +26,8 @@ function Counter({
       <div className="bg-white rounded-2xl border border-gray-200 flex items-center justify-between px-3 py-2 gap-2">
         <button
           type="button"
-          onClick={() => onChange(Math.max(0, value - 1))}
-          className="w-12 h-12 rounded-xl bg-gray-100 text-2xl font-bold text-gray-600 active:scale-95 transition-all flex items-center justify-center select-none"
+          onClick={() => onChange(Math.max(0, (value ?? 0) - 1))}
+          className="w-14 h-14 rounded-xl bg-gray-100 text-3xl font-bold text-gray-600 active:scale-95 transition-all flex items-center justify-center select-none"
         >
           −
         </button>
@@ -33,7 +35,7 @@ function Counter({
         {editing ? (
           <input
             type="number"
-            className="flex-1 text-center text-4xl font-bold text-gray-900 outline-none bg-transparent"
+            className="flex-1 text-center text-5xl font-bold text-gray-900 outline-none bg-transparent"
             value={raw}
             autoFocus
             onChange={e => setRaw(e.target.value)}
@@ -52,17 +54,17 @@ function Counter({
           />
         ) : (
           <span
-            className="flex-1 text-center text-4xl font-bold text-gray-900 cursor-pointer py-2"
-            onClick={() => { setRaw(String(value)); setEditing(true); }}
+            className="flex-1 text-center text-5xl font-bold text-gray-900 cursor-pointer py-3"
+            onClick={() => { setRaw(display); setEditing(true); }}
           >
-            {value}
+            {value === null ? <span className="text-gray-300">—</span> : value}
           </span>
         )}
 
         <button
           type="button"
-          onClick={() => onChange(value + 1)}
-          className="w-12 h-12 rounded-xl bg-yellow-400 text-2xl font-bold text-gray-900 active:scale-95 transition-all flex items-center justify-center select-none"
+          onClick={() => onChange((value ?? 0) + 1)}
+          className="w-14 h-14 rounded-xl bg-yellow-400 text-3xl font-bold text-gray-900 active:scale-95 transition-all flex items-center justify-center select-none"
         >
           +
         </button>
@@ -74,22 +76,40 @@ function Counter({
 export default function RegistroHuevos() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loaded, setLoaded] = useState(false);
-  const [bandejas, setBandejas] = useState(0);
-  const [bandFertiles, setBandFertiles] = useState(0);
-  const [docenas, setDocenas] = useState(0);
-  const [rotos, setRotos] = useState(0);
+  const [bandejas, setBandejas] = useState<number | null>(null);
+  const [bandFertiles, setBandFertiles] = useState<number | null>(null);
+  const [docenas, setDocenas] = useState<number | null>(null);
+  const [rotos, setRotos] = useState<number | null>(null);
+  const [docenasFertiles, setDocenasFertiles] = useState<number | null>(null);
   const [notas, setNotas] = useState('');
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
+  const [pendingRecord, setPendingRecord] = useState<number | null>(null);
 
-  if (!loaded) {
-    supabase.auth.getUser().then(({ data: { user } }) => {
+  useEffect(() => {
+    const load = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
       if (!user) { window.location.href = '/'; return; }
-      supabase.from('profiles').select('full_name, role')
-        .eq('id', user.id).single()
-        .then(({ data }) => { if (data) setProfile(data); setLoaded(true); });
-    });
-  }
+
+      const { data } = await supabase.from('profiles')
+        .select('full_name, role').eq('id', user.id).single();
+      if (data) setProfile(data);
+
+      // Si es owner, buscar si hay registro de hoy con fértiles pendientes
+      if (data?.role === 'owner') {
+        const today = new Date().toISOString().split('T')[0];
+        const { data: rec } = await supabase.from('daily_records')
+          .select('id, docenas_fertiles')
+          .eq('date', today)
+          .is('docenas_fertiles', null)
+          .limit(1).single();
+        if (rec) setPendingRecord(rec.id);
+      }
+
+      setLoaded(true);
+    };
+    load();
+  }, []);
 
   const isOwner = profile?.role === 'owner';
 
@@ -100,29 +120,46 @@ export default function RegistroHuevos() {
     if (!user) return;
 
     const now = new Date();
+
     const { error } = await supabase.from('daily_records').insert({
       date: now.toISOString().split('T')[0],
       user_id: user.id,
-      bandejas_consumo: bandejas,
-      bandejas_fertiles: isOwner ? bandFertiles : 0,
-      docenas_armadas: docenas,
-      huevos_rotos: rotos,
+      bandejas_consumo: bandejas ?? 0,
+      bandejas_fertiles: bandFertiles ?? 0,
+      docenas_armadas: docenas ?? 0,
+      huevos_rotos: rotos ?? 0,
+      docenas_fertiles: null, // pendiente para que el owner complete
       notas: notas.trim() || null,
       registered_at: now.toTimeString().split(' ')[0],
     });
 
     if (!error) {
       setSuccess(true);
-      setBandejas(0);
-      setBandFertiles(0);
-      setDocenas(0);
-      setRotos(0);
+      setBandejas(null);
+      setBandFertiles(null);
+      setDocenas(null);
+      setRotos(null);
       setNotas('');
       setTimeout(() => setSuccess(false), 3000);
     } else {
       alert('Error al guardar: ' + error.message);
     }
     setLoading(false);
+  };
+
+  const handleCompletarFertiles = async () => {
+    if (!pendingRecord || docenasFertiles === null) return;
+    setLoading(true);
+
+    await supabase.from('daily_records')
+      .update({ docenas_fertiles: docenasFertiles })
+      .eq('id', pendingRecord);
+
+    setDocenasFertiles(null);
+    setPendingRecord(null);
+    setLoading(false);
+    setSuccess(true);
+    setTimeout(() => setSuccess(false), 3000);
   };
 
   if (!loaded) return (
@@ -150,6 +187,32 @@ export default function RegistroHuevos() {
           </p>
         </div>
 
+        {/* Panel owner: completar fértiles pendientes */}
+        {isOwner && pendingRecord && (
+          <div className="card mb-4 border-yellow-200 bg-yellow-50 space-y-4">
+            <div>
+              <p className="text-xs font-semibold text-yellow-700 uppercase tracking-wide mb-1">
+                Fértiles pendientes de hoy
+              </p>
+              <p className="text-sm text-yellow-600">
+                Hay un registro de hoy sin docenas de fértiles seleccionadas. Completalo acá.
+              </p>
+            </div>
+            <Counter
+              label="Docenas de fértiles seleccionadas"
+              value={docenasFertiles}
+              onChange={setDocenasFertiles}
+            />
+            <button
+              onClick={handleCompletarFertiles}
+              disabled={loading || docenasFertiles === null}
+              className="btn-primary w-full py-3 text-sm"
+            >
+              {loading ? 'Guardando...' : 'Confirmar fértiles'}
+            </button>
+          </div>
+        )}
+
         <form onSubmit={handleSubmit} className="space-y-4">
 
           <div className="card space-y-5">
@@ -167,19 +230,6 @@ export default function RegistroHuevos() {
             <Counter label="Docenas armadas" value={docenas} onChange={setDocenas} />
             <Counter label="Huevos rotos / descartados" value={rotos} onChange={setRotos} />
           </div>
-
-          {isOwner && (
-            <div className="card space-y-5">
-              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">
-                Fértiles — solo admin
-              </p>
-              <Counter
-                label="Bandejas fértiles seleccionadas"
-                value={bandFertiles}
-                onChange={setBandFertiles}
-              />
-            </div>
-          )}
 
           <div className="card">
             <label className="text-sm font-medium text-gray-500 mb-2 block">
