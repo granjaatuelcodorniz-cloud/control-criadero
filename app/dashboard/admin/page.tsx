@@ -86,7 +86,7 @@ export default function AdminDashboard() {
       const newAlerts: Alert[] = [];
 
       const { data: stockData } = await supabase
-        .from('stock_items').select('name, current_quantity, alert_threshold');
+        .from('stock_items').select('name, unit, current_quantity, alert_threshold');
       if (stockData) {
         stockData.forEach(item => {
           if (item.current_quantity <= item.alert_threshold) {
