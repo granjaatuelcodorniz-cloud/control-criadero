@@ -176,36 +176,48 @@ export default function Dashboard() {
     await loadData();
   };
 
-  const handleStockConsume = async () => {
-    if (!selectedStock || stockQty <= 0) return;
-    setSavingStock(true);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
+const handleStockConsume = async () => {
+  if (!selectedStock || stockQty <= 0) return;
+  setSavingStock(true);
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) { setSavingStock(false); return; }
 
-    const item = stockItems.find(i => String(i.id) === selectedStock);
-    if (!item) return;
+  const item = stockItems.find(i => String(i.id) === selectedStock);
+  if (!item) { setSavingStock(false); return; }
 
-    await supabase.from('stock_movements').insert({
-      stock_item_id: Number(selectedStock),
-      quantity: stockQty,
-      movement_type: 'salida',
-      notes: stockNotes.trim() || null,
-      user_id: user.id,
-      date: today,
-    });
+  const { error: movError } = await supabase.from('stock_movements').insert({
+    stock_item_id: Number(selectedStock),
+    quantity: stockQty,
+    movement_type: 'salida',
+    notes: stockNotes.trim() || null,
+    user_id: user.id,
+    date: today,
+  });
 
-    await supabase.from('stock_items')
-      .update({ current_quantity: Math.max(0, item.current_quantity - stockQty) })
-      .eq('id', Number(selectedStock));
-
-    setStockQty(1);
-    setStockNotes('');
-    setShowStockForm(false);
+  if (movError) {
+    alert('Error al registrar movimiento: ' + movError.message);
     setSavingStock(false);
-    setStockSaved(true);
-    setTimeout(() => setStockSaved(false), 3000);
-    await loadData();
-  };
+    return;
+  }
+
+  const { error: updateError } = await supabase.from('stock_items')
+    .update({ current_quantity: Math.max(0, item.current_quantity - stockQty) })
+    .eq('id', Number(selectedStock));
+
+  if (updateError) {
+    alert('Error al actualizar stock: ' + updateError.message);
+    setSavingStock(false);
+    return;
+  }
+
+  setStockQty(1);
+  setStockNotes('');
+  setShowStockForm(false);
+  setSavingStock(false);
+  setStockSaved(true);
+  setTimeout(() => setStockSaved(false), 3000);
+  await loadData();
+};
 
   if (loading) return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center">
