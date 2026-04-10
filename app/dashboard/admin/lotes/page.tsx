@@ -3,7 +3,6 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import Header from '@/components/Header';
-import Link from 'next/link';
 import { Plus, X } from 'lucide-react';
 
 type Profile = { full_name: string; role: 'owner' | 'collaborator' };
@@ -58,13 +57,16 @@ export default function Lotes() {
     if (lossesData) setLosses(lossesData);
 
     const sevenDaysAgo = new Date();
-sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
-const { data: records } = await supabase
-  .from('daily_records')
-  .select('date, docenas_armadas, huevos_rotos')
-  .gte('date', sevenDaysAgo.toISOString().split('T')[0])
-  .order('date');
-if (records) setWeekRecords(records);
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
+    const { data: records } = await supabase
+      .from('daily_records')
+      .select('date, docenas_armadas, huevos_rotos')
+      .gte('date', sevenDaysAgo.toISOString().split('T')[0])
+      .order('date');
+    if (records) setWeekRecords(records);
+
+    setLoading(false);
+  };
 
   useEffect(() => { loadData(); }, []);
 
@@ -100,13 +102,13 @@ if (records) setWeekRecords(records);
   };
 
   const calcPostura = (lot: Lot) => {
-  if (lot.current_quantity === 0 || weekRecords.length === 0) return null;
-  const totalHuevos = weekRecords.reduce((s, r) => s + (r.docenas_armadas * 12) + r.huevos_rotos, 0);
-  const totalAves = lots.reduce((s, l) => s + l.current_quantity, 0);
-  if (totalAves === 0) return null;
-  const promedioTotal = totalHuevos / (weekRecords.length * totalAves);
-  return Math.round(promedioTotal * 100);
-};
+    if (lot.current_quantity === 0 || weekRecords.length === 0) return null;
+    const totalHuevos = weekRecords.reduce((s, r) => s + (r.docenas_armadas * 12) + r.huevos_rotos, 0);
+    const totalAves = lots.reduce((s, l) => s + l.current_quantity, 0);
+    if (totalAves === 0) return null;
+    const promedioTotal = totalHuevos / (weekRecords.length * totalAves);
+    return Math.round(promedioTotal * 100);
+  };
 
   if (loading) return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center">
@@ -127,7 +129,6 @@ if (records) setWeekRecords(records);
           {saved && <span className="text-green-600 text-sm font-medium">✓ Guardado</span>}
         </div>
 
-        {/* Lista de lotes */}
         <div className="space-y-3">
           {lots.map(lot => {
             const bajas = losses.filter(l => l.lot_id === lot.id);
@@ -138,7 +139,9 @@ if (records) setWeekRecords(records);
                   <div>
                     <h3 className="font-semibold text-gray-900">{lot.code}</h3>
                     <p className="text-xs text-gray-400 mt-0.5">
-                      Ingreso: {new Date(lot.start_date + 'T12:00:00').toLocaleDateString('es-AR', { day: 'numeric', month: 'long', year: 'numeric' })}
+                      Ingreso: {new Date(lot.start_date + 'T12:00:00').toLocaleDateString('es-AR', {
+                        day: 'numeric', month: 'long', year: 'numeric'
+                      })}
                     </p>
                   </div>
                   {postura !== null && (
@@ -161,7 +164,6 @@ if (records) setWeekRecords(records);
                   ))}
                 </div>
 
-                {/* Barra de estado */}
                 <div className="w-full bg-gray-100 rounded-full h-1.5 mb-3">
                   <div
                     className="bg-yellow-400 h-1.5 rounded-full"
@@ -169,7 +171,6 @@ if (records) setWeekRecords(records);
                   />
                 </div>
 
-                {/* Últimas bajas */}
                 {bajas.length > 0 && (
                   <div className="border-t border-gray-50 pt-3">
                     <p className="text-xs text-gray-400 mb-2">Últimas bajas</p>
@@ -189,7 +190,6 @@ if (records) setWeekRecords(records);
           })}
         </div>
 
-        {/* Nuevo lote */}
         {!showNewLot ? (
           <button
             onClick={() => setShowNewLot(true)}
