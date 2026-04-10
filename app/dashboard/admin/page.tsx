@@ -6,7 +6,7 @@ import Header from '@/components/Header';
 import Link from 'next/link';
 import {
   TrendingUp, Package, Heart, ClipboardList,
-  AlertTriangle, CheckCircle, Clock, Egg
+  AlertTriangle, CheckCircle, Clock, Egg, Utensils
 } from 'lucide-react';
 
 type Profile = { full_name: string; role: 'owner' | 'collaborator' };
@@ -165,9 +165,11 @@ export default function AdminDashboard() {
 
   const dias = ['L', 'M', 'X', 'J', 'V', 'S', 'D'];
 
-  const navCards = [
+ const navCards = [
     { href: '/dashboard/admin/lotes', icon: TrendingUp, label: 'Lotes', color: 'text-green-600', bg: 'bg-green-50' },
     { href: '/dashboard/admin/stock', icon: Package, label: 'Stock', color: 'text-blue-600', bg: 'bg-blue-50' },
+    // Nuevo card de Alimento
+    { href: '/dashboard/alimento', icon: Utensils, label: 'Alimento', color: 'text-orange-500', bg: 'bg-orange-50' },
     { href: '/dashboard/admin/sanidad', icon: Heart, label: 'Sanidad', color: 'text-red-500', bg: 'bg-red-50' },
     { href: '/dashboard/admin/tareas', icon: ClipboardList, label: 'Tareas', color: 'text-purple-600', bg: 'bg-purple-50' },
   ];
