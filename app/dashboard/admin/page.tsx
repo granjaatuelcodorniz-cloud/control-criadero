@@ -54,19 +54,18 @@ export default function AdminDashboard() {
 
       // Registro consumo hoy
       const { data: todayData } = await supabase
-        .from('daily_records').select('*')
-        .eq('date', today)
-        .order('created_at', { ascending: false })
-        .limit(1).maybeSingle();
-      if (todayData) setTodayRecord(todayData);
+       .from('daily_records').select('*')     .eq('date', today)
+       .order('created_at', { ascending: false })
+       .limit(1);
+      if (todayData && todayData.length > 0) setTodayRecord(todayData[0]);
 
       // Registro fértiles hoy
       const { data: fertileData } = await supabase
         .from('fertile_records').select('*')
         .eq('date', today)
         .order('created_at', { ascending: false })
-        .limit(1).maybeSingle();
-      if (fertileData) setTodayFertile(fertileData);
+        .limit(1);
+      if (fertileData && fertileData.length > 0) setTodayFertile(fertileData[0]);
 
       // Últimos 7 días
       const sevenDaysAgo = new Date();

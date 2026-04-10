@@ -27,7 +27,7 @@ export default function Lotes() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [lots, setLots] = useState<Lot[]>([]);
   const [losses, setLosses] = useState<Loss[]>([]);
-  const [weekRecords, setWeekRecords] = useState<{ date: string; huevos_recolectados: number }[]>([]);
+  const [weekRecords, setWeekRecords] = useState<{ date: string; docenas_armadas: number; huevos_rotos: number }[]>([]);
   const [showNewLot, setShowNewLot] = useState(false);
   const [newCode, setNewCode] = useState('');
   const [newDate, setNewDate] = useState(new Date().toISOString().split('T')[0]);
@@ -58,16 +58,13 @@ export default function Lotes() {
     if (lossesData) setLosses(lossesData);
 
     const sevenDaysAgo = new Date();
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
-    const { data: records } = await supabase
-      .from('daily_records')
-      .select('date, huevos_recolectados')
-      .gte('date', sevenDaysAgo.toISOString().split('T')[0])
-      .order('date');
-    if (records) setWeekRecords(records);
-
-    setLoading(false);
-  };
+sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
+const { data: records } = await supabase
+  .from('daily_records')
+  .select('date, docenas_armadas, huevos_rotos')
+  .gte('date', sevenDaysAgo.toISOString().split('T')[0])
+  .order('date');
+if (records) setWeekRecords(records);
 
   useEffect(() => { loadData(); }, []);
 
@@ -103,13 +100,13 @@ export default function Lotes() {
   };
 
   const calcPostura = (lot: Lot) => {
-    if (lot.current_quantity === 0 || weekRecords.length === 0) return null;
-    const totalHuevos = weekRecords.reduce((s, r) => s + r.huevos_recolectados, 0);
-    const totalAves = lots.reduce((s, l) => s + l.current_quantity, 0);
-    if (totalAves === 0) return null;
-    const promedioTotal = totalHuevos / (weekRecords.length * totalAves);
-    return Math.round(promedioTotal * 100);
-  };
+  if (lot.current_quantity === 0 || weekRecords.length === 0) return null;
+  const totalHuevos = weekRecords.reduce((s, r) => s + (r.docenas_armadas * 12) + r.huevos_rotos, 0);
+  const totalAves = lots.reduce((s, l) => s + l.current_quantity, 0);
+  if (totalAves === 0) return null;
+  const promedioTotal = totalHuevos / (weekRecords.length * totalAves);
+  return Math.round(promedioTotal * 100);
+};
 
   if (loading) return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center">
