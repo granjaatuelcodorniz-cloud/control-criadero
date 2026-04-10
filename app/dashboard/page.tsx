@@ -26,6 +26,13 @@ type Lot = {
   current_quantity: number;
 };
 
+type StockItem = {
+  id: number;
+  name: string;
+  unit: string;
+  current_quantity: number;
+};
+
 export default function Dashboard() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [dailyTasks, setDailyTasks] = useState<Task[]>([]);
@@ -42,6 +49,13 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [savingLoss, setSavingLoss] = useState(false);
   const [lossSaved, setLossSaved] = useState(false);
+  const [stockItems, setStockItems] = useState<StockItem[]>([]);
+  const [selectedStock, setSelectedStock] = useState('');
+  const [stockQty, setStockQty] = useState(1);
+  const [stockNotes, setStockNotes] = useState('');
+  const [showStockForm, setShowStockForm] = useState(false);
+  const [stockSaved, setStockSaved] = useState(false);
+  const [savingStock, setSavingStock] = useState(false);
 
   const today = new Date().toISOString().split('T')[0];
 
@@ -83,6 +97,15 @@ export default function Dashboard() {
     if (lotsData) {
       setLots(lotsData);
       if (lotsData.length > 0) setSelectedLot(String(lotsData[0].id));
+    }
+
+    const { data: stockData } = await supabase
+      .from('stock_items')
+      .select('id, name, unit, current_quantity')
+      .order('name');
+    if (stockData) {
+      setStockItems(stockData);
+      if (stockData.length > 0) setSelectedStock(String(stockData[0].id));
     }
 
     setLoading(false);
@@ -150,6 +173,37 @@ export default function Dashboard() {
 
     setExtraTaskDesc('');
     setShowExtraTask(false);
+    await loadData();
+  };
+
+  const handleStockConsume = async () => {
+    if (!selectedStock || stockQty <= 0) return;
+    setSavingStock(true);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    const item = stockItems.find(i => String(i.id) === selectedStock);
+    if (!item) return;
+
+    await supabase.from('stock_movements').insert({
+      stock_item_id: Number(selectedStock),
+      quantity: stockQty,
+      movement_type: 'salida',
+      notes: stockNotes.trim() || null,
+      user_id: user.id,
+      date: today,
+    });
+
+    await supabase.from('stock_items')
+      .update({ current_quantity: Math.max(0, item.current_quantity - stockQty) })
+      .eq('id', Number(selectedStock));
+
+    setStockQty(1);
+    setStockNotes('');
+    setShowStockForm(false);
+    setSavingStock(false);
+    setStockSaved(true);
+    setTimeout(() => setStockSaved(false), 3000);
     await loadData();
   };
 
@@ -350,6 +404,70 @@ export default function Dashboard() {
                   {savingLoss ? 'Guardando...' : 'Confirmar baja'}
                 </button>
                 <button onClick={() => setShowLossForm(false)} className="btn-secondary px-3">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Consumo de insumos */}
+        <div>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-semibold text-gray-700 text-sm uppercase tracking-wide">Insumos</h3>
+            {stockSaved && <span className="text-green-600 text-xs font-medium">✓ Guardado</span>}
+          </div>
+          {!showStockForm ? (
+            <button
+              onClick={() => setShowStockForm(true)}
+              className="btn-secondary w-full py-3 text-sm rounded-2xl"
+            >
+              Registrar uso de insumo
+            </button>
+          ) : (
+            <div className="bg-white rounded-2xl border border-gray-200 p-4 space-y-4">
+              <div>
+                <label className="text-sm text-gray-600 mb-1 block">Insumo</label>
+                <select
+                  className="input-base"
+                  value={selectedStock}
+                  onChange={e => setSelectedStock(e.target.value)}
+                >
+                  {stockItems.map(i => (
+                    <option key={i.id} value={i.id}>
+                      {i.name} — {i.current_quantity} {i.unit}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-sm text-gray-600 mb-1 block">Cantidad usada</label>
+                <input
+                  type="number"
+                  min="1"
+                  className="input-base"
+                  value={stockQty}
+                  onChange={e => setStockQty(Math.max(1, Number(e.target.value)))}
+                />
+              </div>
+              <div>
+                <label className="text-sm text-gray-600 mb-1 block">Nota (opcional)</label>
+                <input
+                  className="input-base"
+                  placeholder="Ej: abrí una bolsa nueva..."
+                  value={stockNotes}
+                  onChange={e => setStockNotes(e.target.value)}
+                />
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={handleStockConsume}
+                  disabled={savingStock}
+                  className="btn-primary flex-1 py-3 text-sm"
+                >
+                  {savingStock ? 'Guardando...' : 'Confirmar uso'}
+                </button>
+                <button onClick={() => setShowStockForm(false)} className="btn-secondary px-3">
                   <X className="w-4 h-4" />
                 </button>
               </div>
