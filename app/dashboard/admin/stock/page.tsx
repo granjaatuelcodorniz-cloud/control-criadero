@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import Header from '@/components/Header';
-import { Plus, X, Pencil, Check } from 'lucide-react';
+import { Plus, X, Pencil, Check, Trash2 } from 'lucide-react';
 
 type Profile = { full_name: string; role: 'owner' | 'collaborator' };
 type StockItem = {
@@ -383,20 +383,30 @@ export default function Stock() {
                   <>
                     <div className="flex items-center justify-between mb-2">
                       <h3 className="font-semibold text-gray-900">{item.name}</h3>
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-col items-end gap-1">
+                      <div className="flex items-center gap-1">
                         <span className="text-xl font-bold text-gray-900">{item.current_quantity}</span>
                         <span className="text-sm text-gray-400">{item.unit}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
                         <button
                           onClick={() => {
                             setEditingId(item.id);
                             setEditThreshold(item.alert_threshold);
                             setEditUnit(item.unit);
                           }}
-                          className="text-gray-300 hover:text-gray-500 transition-colors ml-1"
+                          className="text-gray-300 hover:text-gray-500 transition-colors"
                         >
                           <Pencil className="w-4 h-4" />
                         </button>
+                        <button
+                          onClick={() => handleDeleteItem(item.id)}
+                          className="text-gray-300 hover:text-red-400 transition-colors"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
                       </div>
+                    </div>
                     </div>
                     <div className="w-full bg-gray-100 rounded-full h-1.5 mb-1">
                       <div
