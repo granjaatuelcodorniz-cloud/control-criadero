@@ -231,6 +231,13 @@ export default function Stock() {
     return Math.min(100, Math.round((item.current_quantity / max) * 100));
   };
 
+   const handleDeleteItem = async (id: number) => {
+   if (!confirm('¿Eliminar este insumo? Se perderá el historial de movimientos.')) return;
+   await supabase.from('stock_movements').delete().eq('stock_item_id', id);
+   await supabase.from('stock_items').delete().eq('id', id);
+   await loadData();
+  };
+
   if (loading) return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center">
       <p className="text-gray-400">Cargando...</p>

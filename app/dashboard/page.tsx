@@ -59,6 +59,7 @@ export default function Dashboard() {
   const [showStockForm, setShowStockForm] = useState(false);
   const [stockSaved, setStockSaved] = useState(false);
   const [savingStock, setSavingStock] = useState(false);
+  const [confirmStock, setConfirmStock] = useState<number | null>(null);
 
   const today = new Date().toISOString().split('T')[0];
 
@@ -493,15 +494,33 @@ export default function Dashboard() {
                   <p className="font-medium text-gray-800">{item.name}</p>
                   <p className="text-xs text-gray-400">{item.current_quantity} {item.unit}</p>
                 </div>
-                <button
-                  onClick={() => {
-                    setSelectedStock(String(item.id));
-                    setShowStockForm(true);
-                  }}
-                  className="btn-secondary px-4 py-2 text-sm"
-                >
-                  Usar
-                </button>
+                {confirmStock === item.id ? (
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => {
+                        setSelectedStock(String(item.id));
+                        setShowStockForm(true);
+                        setConfirmStock(null);
+                      }}
+                      className="btn-primary px-3 py-2 text-sm"
+                    >
+                      Confirmar
+                    </button>
+                    <button
+                      onClick={() => setConfirmStock(null)}
+                      className="btn-secondary px-3 py-2"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setConfirmStock(item.id)}
+                    className="btn-secondary px-4 py-2 text-sm"
+                  >
+                    Usar
+                  </button>
+                )}
               </div>
             ))}
           </div>
