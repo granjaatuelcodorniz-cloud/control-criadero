@@ -31,6 +31,9 @@ type StockItem = {
   name: string;
   unit: string;
   current_quantity: number;
+  is_feed?: boolean;
+  bolsas_restantes?: number | null;
+  kg_por_bolsa?: number | null;
 };
 
 export default function Dashboard() {
@@ -101,11 +104,12 @@ export default function Dashboard() {
 
     const { data: stockData } = await supabase
       .from('stock_items')
-      .select('id, name, unit, current_quantity')
+      .select('id, name, unit, current_quantity, is_feed, bolsas_restantes, kg_por_bolsa')
       .order('name');
     if (stockData) {
       setStockItems(stockData);
-      if (stockData.length > 0) setSelectedStock(String(stockData[0].id));
+      const nonFeed = stockData.find(i => !i.is_feed);
+      if (nonFeed) setSelectedStock(String(nonFeed.id));
     }
 
     setLoading(false);
@@ -176,48 +180,75 @@ export default function Dashboard() {
     await loadData();
   };
 
-const handleStockConsume = async () => {
-  if (!selectedStock || stockQty <= 0) return;
-  setSavingStock(true);
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) { setSavingStock(false); return; }
+  const handleStockConsume = async () => {
+    if (!selectedStock || stockQty <= 0) return;
+    setSavingStock(true);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) { setSavingStock(false); return; }
 
-  const item = stockItems.find(i => String(i.id) === selectedStock);
-  if (!item) { setSavingStock(false); return; }
+    const item = stockItems.find(i => String(i.id) === selectedStock);
+    if (!item) { setSavingStock(false); return; }
 
-  const { error: movError } = await supabase.from('stock_movements').insert({
-    stock_item_id: Number(selectedStock),
-    quantity: stockQty,
-    movement_type: 'salida',
-    notes: stockNotes.trim() || null,
-    user_id: user.id,
-    date: today,
-  });
+    const { error: movError } = await supabase.from('stock_movements').insert({
+      stock_item_id: Number(selectedStock),
+      quantity: stockQty,
+      movement_type: 'salida',
+      notes: stockNotes.trim() || null,
+      user_id: user.id,
+      date: today,
+    });
 
-  if (movError) {
-    alert('Error al registrar movimiento: ' + movError.message);
+    if (movError) {
+      alert('Error al registrar movimiento: ' + movError.message);
+      setSavingStock(false);
+      return;
+    }
+
+    const { error: updateError } = await supabase.from('stock_items')
+      .update({ current_quantity: Math.max(0, item.current_quantity - stockQty) })
+      .eq('id', Number(selectedStock));
+
+    if (updateError) {
+      alert('Error al actualizar stock: ' + updateError.message);
+      setSavingStock(false);
+      return;
+    }
+
+    setStockQty(1);
+    setStockNotes('');
+    setShowStockForm(false);
     setSavingStock(false);
-    return;
-  }
+    setStockSaved(true);
+    setTimeout(() => setStockSaved(false), 3000);
+    await loadData();
+  };
 
-  const { error: updateError } = await supabase.from('stock_items')
-    .update({ current_quantity: Math.max(0, item.current_quantity - stockQty) })
-    .eq('id', Number(selectedStock));
+  const handleOpenBolsa = async () => {
+    const feedItem = stockItems.find(i => i.is_feed);
+    if (!feedItem?.kg_por_bolsa || !feedItem?.bolsas_restantes) return;
+    setSavingStock(true);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) { setSavingStock(false); return; }
 
-  if (updateError) {
-    alert('Error al actualizar stock: ' + updateError.message);
+    await supabase.from('stock_items').update({
+      current_quantity: Math.max(0, feedItem.current_quantity - feedItem.kg_por_bolsa),
+      bolsas_restantes: Math.max(0, feedItem.bolsas_restantes - 1),
+    }).eq('id', feedItem.id);
+
+    await supabase.from('stock_movements').insert({
+      stock_item_id: feedItem.id,
+      quantity: feedItem.kg_por_bolsa,
+      movement_type: 'salida',
+      notes: 'Bolsa abierta',
+      user_id: user.id,
+      date: today,
+    });
+
     setSavingStock(false);
-    return;
-  }
-
-  setStockQty(1);
-  setStockNotes('');
-  setShowStockForm(false);
-  setSavingStock(false);
-  setStockSaved(true);
-  setTimeout(() => setStockSaved(false), 3000);
-  await loadData();
-};
+    setStockSaved(true);
+    setTimeout(() => setStockSaved(false), 3000);
+    await loadData();
+  };
 
   if (loading) return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center">
@@ -232,6 +263,8 @@ const handleStockConsume = async () => {
 
   const totalTasks = dailyTasks.length + periodicTasks.length + customTasks.length;
   const doneTasks = completedIds.length;
+  const feedItem = stockItems.find(i => i.is_feed);
+  const otherItems = stockItems.filter(i => !i.is_feed);
 
   const TaskItem = ({ task }: { task: Task }) => {
     const isDone = completedIds.includes(task.id);
@@ -423,21 +456,59 @@ const handleStockConsume = async () => {
           )}
         </div>
 
-        {/* Consumo de insumos */}
+        {/* Insumos */}
         <div>
           <div className="flex items-center justify-between mb-3">
             <h3 className="font-semibold text-gray-700 text-sm uppercase tracking-wide">Insumos</h3>
             {stockSaved && <span className="text-green-600 text-xs font-medium">✓ Guardado</span>}
           </div>
-          {!showStockForm ? (
-            <button
-              onClick={() => setShowStockForm(true)}
-              className="btn-secondary w-full py-3 text-sm rounded-2xl"
-            >
-              Registrar uso de insumo
-            </button>
-          ) : (
-            <div className="bg-white rounded-2xl border border-gray-200 p-4 space-y-4">
+
+          <div className="space-y-2">
+
+            {/* Alimento — botón abrir bolsa */}
+            {feedItem && (
+              <div className="bg-white rounded-2xl border border-gray-200 p-4 flex items-center justify-between">
+                <div>
+                  <p className="font-medium text-gray-800">Alimento</p>
+                  <p className="text-xs text-gray-400">
+                    {feedItem.bolsas_restantes != null
+                      ? `${feedItem.bolsas_restantes} bolsas · ${feedItem.current_quantity} kg`
+                      : `${feedItem.current_quantity} kg`}
+                  </p>
+                </div>
+                <button
+                  onClick={handleOpenBolsa}
+                  disabled={savingStock || !feedItem.bolsas_restantes}
+                  className="btn-primary px-4 py-2 text-sm"
+                >
+                  {savingStock ? '...' : 'Abrí una bolsa'}
+                </button>
+              </div>
+            )}
+
+            {/* Otros insumos — botón Usar */}
+            {otherItems.map(item => (
+              <div key={item.id} className="bg-white rounded-2xl border border-gray-200 p-4 flex items-center justify-between">
+                <div>
+                  <p className="font-medium text-gray-800">{item.name}</p>
+                  <p className="text-xs text-gray-400">{item.current_quantity} {item.unit}</p>
+                </div>
+                <button
+                  onClick={() => {
+                    setSelectedStock(String(item.id));
+                    setShowStockForm(true);
+                  }}
+                  className="btn-secondary px-4 py-2 text-sm"
+                >
+                  Usar
+                </button>
+              </div>
+            ))}
+          </div>
+
+          {/* Formulario cantidad */}
+          {showStockForm && (
+            <div className="bg-white rounded-2xl border border-gray-200 p-4 space-y-4 mt-2">
               <div>
                 <label className="text-sm text-gray-600 mb-1 block">Insumo</label>
                 <select
@@ -445,7 +516,7 @@ const handleStockConsume = async () => {
                   value={selectedStock}
                   onChange={e => setSelectedStock(e.target.value)}
                 >
-                  {stockItems.map(i => (
+                  {otherItems.map(i => (
                     <option key={i.id} value={i.id}>
                       {i.name} — {i.current_quantity} {i.unit}
                     </option>
@@ -466,7 +537,7 @@ const handleStockConsume = async () => {
                 <label className="text-sm text-gray-600 mb-1 block">Nota (opcional)</label>
                 <input
                   className="input-base"
-                  placeholder="Ej: abrí una bolsa nueva..."
+                  placeholder="Ej: limpieza bebederos..."
                   value={stockNotes}
                   onChange={e => setStockNotes(e.target.value)}
                 />
@@ -479,7 +550,10 @@ const handleStockConsume = async () => {
                 >
                   {savingStock ? 'Guardando...' : 'Confirmar uso'}
                 </button>
-                <button onClick={() => setShowStockForm(false)} className="btn-secondary px-3">
+                <button
+                  onClick={() => setShowStockForm(false)}
+                  className="btn-secondary px-3"
+                >
                   <X className="w-4 h-4" />
                 </button>
               </div>
