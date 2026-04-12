@@ -44,16 +44,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let mounted = true;
 
-    // Timeout de seguridad — si en 5 segundos no cargó, salimos del loading
-    const timeout = setTimeout(() => {
-      if (mounted) setLoading(false);
-    }, 5000);
-
+    // Inicialización — única vez que maneja loading
     const init = async () => {
       try {
         const { data: { session } } = await supabase.auth.getSession();
         if (!mounted) return;
-
         if (session?.user) {
           setUser(session.user);
           await loadProfile(session.user.id);
@@ -61,15 +56,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       } catch {
         // sesión inválida
       } finally {
-        if (mounted) {
-          clearTimeout(timeout);
-          setLoading(false);
-        }
+        if (mounted) setLoading(false);
       }
     };
 
     init();
 
+    // Listener — solo actualiza user y profile, nunca toca loading
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         if (!mounted) return;
@@ -77,7 +70,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (event === 'SIGNED_OUT') {
           setUser(null);
           setProfile(null);
-          setLoading(false);
           return;
         }
 
@@ -88,14 +80,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setUser(null);
           setProfile(null);
         }
-
-        if (mounted) setLoading(false);
       }
     );
 
     return () => {
       mounted = false;
-      clearTimeout(timeout);
       subscription.unsubscribe();
     };
   }, []);
