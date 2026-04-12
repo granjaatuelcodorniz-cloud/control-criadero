@@ -23,38 +23,73 @@ const AuthContext = createContext<AuthContextType>({
   signOut: async () => {},
 });
 
-export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
-  const [profile, setProfile] = useState<Profile | null>(null);
-  const [loading, setLoading] = useState(true);
+const PROFILE_KEY = 'cc_profile';
 
-  const loadProfile = async (userId: string) => {
+function getCachedProfile(): Profile | null {
+  try {
+    const raw = localStorage.getItem(PROFILE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function setCachedProfile(profile: Profile) {
+  try {
+    localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
+  } catch {}
+}
+
+function clearCachedProfile() {
+  try {
+    localStorage.removeItem(PROFILE_KEY);
+  } catch {}
+}
+
+export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const cached = getCachedProfile();
+  const [user, setUser] = useState<User | null>(null);
+  const [profile, setProfile] = useState<Profile | null>(cached);
+  const [loading, setLoading] = useState(!cached); // si hay caché, arranca sin loading
+
+  const loadProfile = async (userId: string): Promise<Profile | null> => {
     try {
       const { data } = await supabase
         .from('profiles')
         .select('full_name, role')
         .eq('id', userId)
         .single();
-      if (data) setProfile(data);
-    } catch {
-      setProfile(null);
-    }
+      if (data) {
+        setCachedProfile(data);
+        setProfile(data);
+        return data;
+      }
+    } catch {}
+    return null;
   };
 
   useEffect(() => {
     let mounted = true;
 
-    // Inicialización — única vez que maneja loading
     const init = async () => {
       try {
         const { data: { session } } = await supabase.auth.getSession();
         if (!mounted) return;
+
         if (session?.user) {
           setUser(session.user);
-          await loadProfile(session.user.id);
+          // Si no hay caché, cargamos el perfil
+          if (!getCachedProfile()) {
+            await loadProfile(session.user.id);
+          }
+        } else {
+          // No hay sesión — limpiamos todo
+          setUser(null);
+          setProfile(null);
+          clearCachedProfile();
         }
       } catch {
-        // sesión inválida
+        clearCachedProfile();
       } finally {
         if (mounted) setLoading(false);
       }
@@ -62,7 +97,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     init();
 
-    // Listener — solo actualiza user y profile, nunca toca loading
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         if (!mounted) return;
@@ -70,15 +104,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (event === 'SIGNED_OUT') {
           setUser(null);
           setProfile(null);
+          clearCachedProfile();
           return;
         }
 
-        if (session?.user) {
+        if (event === 'SIGNED_IN' && session?.user) {
           setUser(session.user);
           await loadProfile(session.user.id);
-        } else {
-          setUser(null);
-          setProfile(null);
+          return;
+        }
+
+        if (event === 'TOKEN_REFRESHED' && session?.user) {
+          setUser(session.user);
+          // Token renovado — no recargamos perfil, ya está en caché
+          return;
         }
       }
     );
@@ -90,9 +129,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signOut = async () => {
-    await supabase.auth.signOut();
+    clearCachedProfile();
     setUser(null);
     setProfile(null);
+    await supabase.auth.signOut();
     window.location.href = '/';
   };
 

@@ -6,7 +6,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useRouter } from 'next/navigation';
 import Header from '@/components/Header';
 import Link from 'next/link';
-import { TrendingUp, Package, Heart, ClipboardList, BarChart2 } from 'lucide-react';
+import { TrendingUp, Package, Heart, ClipboardList, BarChart2, Clock, CheckCircle, AlertTriangle, Egg } from 'lucide-react';
 
 type DailyRecord = {
   date: string;
