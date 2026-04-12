@@ -44,6 +44,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let mounted = true;
 
+    // Timeout de seguridad — si en 5 segundos no cargó, salimos del loading
+    const timeout = setTimeout(() => {
+      if (mounted) setLoading(false);
+    }, 5000);
+
     const init = async () => {
       try {
         const { data: { session } } = await supabase.auth.getSession();
@@ -54,9 +59,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           await loadProfile(session.user.id);
         }
       } catch {
-        // sesión inválida o expirada
+        // sesión inválida
       } finally {
-        if (mounted) setLoading(false);
+        if (mounted) {
+          clearTimeout(timeout);
+          setLoading(false);
+        }
       }
     };
 
@@ -80,12 +88,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setUser(null);
           setProfile(null);
         }
-        setLoading(false);
+
+        if (mounted) setLoading(false);
       }
     );
 
     return () => {
       mounted = false;
+      clearTimeout(timeout);
       subscription.unsubscribe();
     };
   }, []);
