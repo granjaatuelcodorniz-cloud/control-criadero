@@ -4,8 +4,10 @@ import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import Header from '@/components/Header';
 import { Plus, X, Trash2 } from 'lucide-react';
+// 1. Integración de Auth y Navegación
+import { useAuth } from '@/contexts/AuthContext';
+import { useRouter } from 'next/navigation';
 
-type Profile = { full_name: string; role: 'owner' | 'collaborator' };
 type Task = {
   id: number;
   description: string;
@@ -16,11 +18,14 @@ type Task = {
   assigned_to: string | null;
   next_execution: string | null;
 };
+
 type Collaborator = { id: string; full_name: string };
 type Completion = { task_id: number; date: string };
 
 export default function Tareas() {
-  const [profile, setProfile] = useState<Profile | null>(null);
+  const { user, profile, loading: authLoading } = useAuth();
+  const router = useRouter();
+
   const [tasks, setTasks] = useState<Task[]>([]);
   const [collaborators, setCollaborators] = useState<Collaborator[]>([]);
   const [completions, setCompletions] = useState<Completion[]>([]);
@@ -35,17 +40,9 @@ export default function Tareas() {
 
   const today = new Date().toISOString().split('T')[0];
 
+  // 2. Carga de datos optimizada
   const loadData = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) { window.location.href = '/'; return; }
-
-    const { data: profileData } = await supabase
-      .from('profiles').select('full_name, role')
-      .eq('id', user.id).single();
-    if (!profileData || profileData.role !== 'owner') {
-      window.location.href = '/dashboard'; return;
-    }
-    setProfile(profileData);
+    setLoading(true);
 
     const { data: tasksData } = await supabase
       .from('tasks').select('*')
@@ -69,13 +66,18 @@ export default function Tareas() {
     setLoading(false);
   };
 
-  useEffect(() => { loadData(); }, []);
+  // 3. Guardián de acceso y trigger de carga
+  useEffect(() => {
+    if (authLoading) return;
+    if (!user || !profile) { router.push('/'); return; }
+    if (profile.role !== 'owner') { router.push('/dashboard'); return; }
+
+    loadData();
+  }, [authLoading, user, profile]);
 
   const handleSave = async () => {
-    if (!newDesc.trim()) return;
+    if (!newDesc.trim() || !user) return;
     setSaving(true);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
 
     await supabase.from('tasks').insert({
       description: newDesc.trim(),
@@ -98,6 +100,7 @@ export default function Tareas() {
   };
 
   const handleDelete = async (id: number) => {
+    if (!confirm('¿Estás seguro de eliminar esta tarea?')) return;
     await supabase.from('tasks').update({ is_active: false }).eq('id', id);
     await loadData();
   };
@@ -130,11 +133,12 @@ export default function Tareas() {
     { label: 'Asignadas', tasks: tasks.filter(t => t.type === 'custom') },
   ];
 
-  if (loading) return (
+  if (authLoading || loading) return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center">
       <p className="text-gray-400">Cargando...</p>
     </div>
   );
+
   if (!profile) return null;
 
   return (

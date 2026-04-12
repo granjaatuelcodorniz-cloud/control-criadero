@@ -4,6 +4,9 @@ import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import Header from '@/components/Header';
 import { Plus, X } from 'lucide-react';
+// 1. Nuevos imports
+import { useAuth } from '@/contexts/AuthContext';
+import { useRouter } from 'next/navigation';
 
 type Profile = { full_name: string; role: 'owner' | 'collaborator' };
 type HealthRecord = {
@@ -20,7 +23,10 @@ type Lot = { id: number; code: string };
 const TIPOS = ['Vitaminas', 'Antibiótico', 'Tratamiento', 'Limpieza profunda', 'Vacuna', 'Antiparasitario', 'Otro'];
 
 export default function Sanidad() {
-  const [profile, setProfile] = useState<Profile | null>(null);
+  // 2. Hook de autenticación (reemplaza al useState de profile)
+  const { user, profile, loading: authLoading } = useAuth();
+  const router = useRouter();
+
   const [records, setRecords] = useState<HealthRecord[]>([]);
   const [lots, setLots] = useState<Lot[]>([]);
   const [showForm, setShowForm] = useState(false);
@@ -34,17 +40,9 @@ export default function Sanidad() {
   const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(true);
 
+  // 3. Función loadData limpia (solo carga datos de salud y lotes)
   const loadData = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) { window.location.href = '/'; return; }
-
-    const { data: profileData } = await supabase
-      .from('profiles').select('full_name, role')
-      .eq('id', user.id).single();
-    if (!profileData || profileData.role !== 'owner') {
-      window.location.href = '/dashboard'; return;
-    }
-    setProfile(profileData);
+    setLoading(true);
 
     const { data: recordsData } = await supabase
       .from('health_records').select('*')
@@ -59,13 +57,18 @@ export default function Sanidad() {
     setLoading(false);
   };
 
-  useEffect(() => { loadData(); }, []);
+  // 4. useEffect Guardián
+  useEffect(() => {
+    if (authLoading) return;
+    if (!user || !profile) { router.push('/'); return; }
+    if (profile.role !== 'owner') { router.push('/dashboard'); return; }
+    
+    loadData();
+  }, [authLoading, user, profile]);
 
   const handleSave = async () => {
-    if (!tipo || !date) return;
+    if (!tipo || !date || !user) return;
     setSaving(true);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
 
     await supabase.from('health_records').insert({
       date,
@@ -74,7 +77,7 @@ export default function Sanidad() {
       dosis: dosis.trim() || null,
       notes: notes.trim() || null,
       next_application: nextApp || null,
-      user_id: user.id,
+      user_id: user.id, // Usamos el ID del contexto global
     });
 
     setTipo(TIPOS[0]);
@@ -99,11 +102,12 @@ export default function Sanidad() {
     return 'bg-gray-50 text-gray-700';
   };
 
-  if (loading) return (
+  if (authLoading || loading) return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center">
       <p className="text-gray-400">Cargando...</p>
     </div>
   );
+
   if (!profile) return null;
 
   return (
@@ -118,7 +122,6 @@ export default function Sanidad() {
           {saved && <span className="text-green-600 text-sm font-medium">✓ Guardado</span>}
         </div>
 
-        {/* Botón agregar */}
         {!showForm ? (
           <button onClick={() => setShowForm(true)} className="btn-primary w-full py-3 text-sm">
             <Plus className="w-4 h-4" /> Registrar evento sanitario
@@ -179,7 +182,6 @@ export default function Sanidad() {
           </div>
         )}
 
-        {/* Historial */}
         {records.length === 0 ? (
           <div className="bg-white rounded-2xl border border-gray-100 p-6 text-center text-gray-400 text-sm">
             Sin registros sanitarios todavía

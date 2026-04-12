@@ -1,15 +1,12 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/lib/supabase';
 import Header from '@/components/Header';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { Egg, CheckSquare, AlertTriangle, ClipboardList, Plus, X } from 'lucide-react';
-
-type Profile = {
-  full_name: string;
-  role: 'owner' | 'collaborator';
-};
 
 type Task = {
   id: number;
@@ -17,7 +14,6 @@ type Task = {
   type: 'daily' | 'periodic' | 'custom';
   frequency_days?: number;
   is_urgent?: boolean;
-  next_execution?: string;
 };
 
 type Lot = {
@@ -37,7 +33,8 @@ type StockItem = {
 };
 
 export default function Dashboard() {
-  const [profile, setProfile] = useState<Profile | null>(null);
+  const { user, profile, loading: authLoading } = useAuth();
+  const router = useRouter();
   const [dailyTasks, setDailyTasks] = useState<Task[]>([]);
   const [periodicTasks, setPeriodicTasks] = useState<Task[]>([]);
   const [customTasks, setCustomTasks] = useState<Task[]>([]);
@@ -63,20 +60,19 @@ export default function Dashboard() {
 
   const today = new Date().toISOString().split('T')[0];
 
-  const loadData = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) { window.location.href = '/'; return; }
+  useEffect(() => {
+    if (authLoading) return;
+    if (!user || !profile) { router.push('/'); return; }
+    if (profile.role === 'owner') { router.push('/dashboard/admin'); return; }
+    loadData();
+  }, [authLoading, user, profile]);
 
-    const { data: profileData } = await supabase
-      .from('profiles')
-      .select('full_name, role')
-      .eq('id', user.id)
-      .single();
-    if (profileData) setProfile(profileData);
+  const loadData = async () => {
+    if (!user) return;
 
     const { data: tasksData } = await supabase
       .from('tasks')
-      .select('id, description, type, frequency_days, is_urgent, next_execution')
+      .select('id, description, type, frequency_days, is_urgent')
       .eq('is_active', true)
       .or(`assigned_to.is.null,assigned_to.eq.${user.id}`)
       .order('type');
@@ -116,12 +112,8 @@ export default function Dashboard() {
     setLoading(false);
   };
 
-  useEffect(() => { loadData(); }, []);
-
   const toggleTask = async (taskId: number) => {
-    const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
-
     const isDone = completedIds.includes(taskId);
     if (isDone) {
       await supabase.from('task_completions').delete()
@@ -129,25 +121,19 @@ export default function Dashboard() {
       setCompletedIds(prev => prev.filter(id => id !== taskId));
     } else {
       await supabase.from('task_completions').insert({
-        task_id: taskId, user_id: user.id,
-        completed: true, date: today
+        task_id: taskId, user_id: user.id, completed: true, date: today
       });
       setCompletedIds(prev => [...prev, taskId]);
     }
   };
 
   const handleSaveLoss = async () => {
-    if (!selectedLot) return;
+    if (!selectedLot || !user) return;
     setSavingLoss(true);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
 
     await supabase.from('lot_losses').insert({
-      lot_id: Number(selectedLot),
-      quantity: lossQty,
-      reason: lossReason.trim() || null,
-      user_id: user.id,
-      date: today
+      lot_id: Number(selectedLot), quantity: lossQty,
+      reason: lossReason.trim() || null, user_id: user.id, date: today
     });
 
     await supabase.from('lots')
@@ -164,16 +150,12 @@ export default function Dashboard() {
   };
 
   const handleAddExtraTask = async () => {
-    if (!extraTaskDesc.trim()) return;
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
+    if (!extraTaskDesc.trim() || !user) return;
 
     await supabase.from('tasks').insert({
       description: extraTaskDesc.trim(),
-      type: 'custom',
-      is_active: true,
-      created_by: user.id,
-      assigned_to: user.id,
+      type: 'custom', is_active: true,
+      created_by: user.id, assigned_to: user.id,
     });
 
     setExtraTaskDesc('');
@@ -182,38 +164,28 @@ export default function Dashboard() {
   };
 
   const handleStockConsume = async () => {
-    if (!selectedStock || stockQty <= 0) return;
+    if (!selectedStock || stockQty <= 0 || !user) return;
     setSavingStock(true);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) { setSavingStock(false); return; }
 
     const item = stockItems.find(i => String(i.id) === selectedStock);
     if (!item) { setSavingStock(false); return; }
 
     const { error: movError } = await supabase.from('stock_movements').insert({
       stock_item_id: Number(selectedStock),
-      quantity: stockQty,
-      movement_type: 'salida',
+      quantity: stockQty, movement_type: 'salida',
       notes: stockNotes.trim() || null,
-      user_id: user.id,
-      date: today,
+      user_id: user.id, date: today,
     });
 
     if (movError) {
-      alert('Error al registrar movimiento: ' + movError.message);
+      alert('Error: ' + movError.message);
       setSavingStock(false);
       return;
     }
 
-    const { error: updateError } = await supabase.from('stock_items')
+    await supabase.from('stock_items')
       .update({ current_quantity: Math.max(0, item.current_quantity - stockQty) })
       .eq('id', Number(selectedStock));
-
-    if (updateError) {
-      alert('Error al actualizar stock: ' + updateError.message);
-      setSavingStock(false);
-      return;
-    }
 
     setStockQty(1);
     setStockNotes('');
@@ -226,10 +198,8 @@ export default function Dashboard() {
 
   const handleOpenBolsa = async () => {
     const feedItem = stockItems.find(i => i.is_feed);
-    if (!feedItem?.kg_por_bolsa || !feedItem?.bolsas_restantes) return;
+    if (!feedItem?.kg_por_bolsa || !feedItem?.bolsas_restantes || !user) return;
     setSavingStock(true);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) { setSavingStock(false); return; }
 
     await supabase.from('stock_items').update({
       current_quantity: Math.max(0, feedItem.current_quantity - feedItem.kg_por_bolsa),
@@ -241,8 +211,7 @@ export default function Dashboard() {
       quantity: feedItem.kg_por_bolsa,
       movement_type: 'salida',
       notes: 'Bolsa abierta',
-      user_id: user.id,
-      date: today,
+      user_id: user.id, date: today,
     });
 
     setSavingStock(false);
@@ -251,16 +220,13 @@ export default function Dashboard() {
     await loadData();
   };
 
-  if (loading) return (
+  if (authLoading || loading) return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center">
       <p className="text-gray-400">Cargando...</p>
     </div>
   );
 
   if (!profile) return null;
-
-  const isOwner = profile.role === 'owner';
-  if (isOwner) { window.location.href = '/dashboard/admin'; return null; }
 
   const totalTasks = dailyTasks.length + periodicTasks.length + customTasks.length;
   const doneTasks = completedIds.length;
@@ -298,11 +264,8 @@ export default function Dashboard() {
 
       <div className="max-w-xl mx-auto px-4 py-6 space-y-6">
 
-        {/* Bienvenida y progreso */}
         <div>
-          <h2 className="text-2xl font-bold text-gray-900">
-            Hola, {profile.full_name} 👋
-          </h2>
+          <h2 className="text-2xl font-bold text-gray-900">Hola, {profile.full_name} 👋</h2>
           <p className="text-gray-500 text-sm mt-1">
             {new Date().toLocaleDateString('es-AR', { weekday: 'long', day: 'numeric', month: 'long' })}
           </p>
@@ -320,13 +283,11 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Registro de huevos */}
         <Link href="/dashboard/huevos" className="btn-primary w-full py-4 text-base rounded-2xl">
           <Egg className="w-5 h-5" />
           Registrar huevos del día
         </Link>
 
-        {/* Tareas diarias */}
         {dailyTasks.length > 0 && (
           <div>
             <div className="flex items-center gap-2 mb-3">
@@ -339,7 +300,6 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* Tareas periódicas */}
         {periodicTasks.length > 0 && (
           <div>
             <div className="flex items-center gap-2 mb-3">
@@ -352,7 +312,6 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* Tareas asignadas por admin */}
         {customTasks.length > 0 && (
           <div>
             <div className="flex items-center gap-2 mb-3">
@@ -365,7 +324,6 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* Agregar tarea extra */}
         <div>
           {!showExtraTask ? (
             <button
@@ -393,60 +351,40 @@ export default function Dashboard() {
           )}
         </div>
 
-        {/* Baja de lote */}
         <div>
           <div className="flex items-center justify-between mb-3">
             <h3 className="font-semibold text-gray-700 text-sm uppercase tracking-wide">Baja de ave</h3>
             {lossSaved && <span className="text-green-600 text-xs font-medium">✓ Guardado</span>}
           </div>
           {!showLossForm ? (
-            <button
-              onClick={() => setShowLossForm(true)}
-              className="btn-secondary w-full py-3 text-sm rounded-2xl"
-            >
+            <button onClick={() => setShowLossForm(true)}
+              className="btn-secondary w-full py-3 text-sm rounded-2xl">
               Registrar baja de ave
             </button>
           ) : (
             <div className="bg-white rounded-2xl border border-gray-200 p-4 space-y-4">
               <div>
                 <label className="text-sm text-gray-600 mb-1 block">Lote</label>
-                <select
-                  className="input-base"
-                  value={selectedLot}
-                  onChange={e => setSelectedLot(e.target.value)}
-                >
+                <select className="input-base" value={selectedLot}
+                  onChange={e => setSelectedLot(e.target.value)}>
                   {lots.map(l => (
-                    <option key={l.id} value={l.id}>
-                      {l.code} — {l.current_quantity} aves
-                    </option>
+                    <option key={l.id} value={l.id}>{l.code} — {l.current_quantity} aves</option>
                   ))}
                 </select>
               </div>
               <div>
                 <label className="text-sm text-gray-600 mb-1 block">Cantidad</label>
-                <input
-                  type="number"
-                  min="1"
-                  className="input-base"
-                  value={lossQty}
-                  onChange={e => setLossQty(Math.max(1, Number(e.target.value)))}
-                />
+                <input type="number" min="1" className="input-base" value={lossQty}
+                  onChange={e => setLossQty(Math.max(1, Number(e.target.value)))} />
               </div>
               <div>
                 <label className="text-sm text-gray-600 mb-1 block">Motivo (opcional)</label>
-                <input
-                  className="input-base"
-                  placeholder="Ej: muerte natural, enfermedad..."
-                  value={lossReason}
-                  onChange={e => setLossReason(e.target.value)}
-                />
+                <input className="input-base" placeholder="Ej: muerte natural..."
+                  value={lossReason} onChange={e => setLossReason(e.target.value)} />
               </div>
               <div className="flex gap-2">
-                <button
-                  onClick={handleSaveLoss}
-                  disabled={savingLoss}
-                  className="btn-primary flex-1 py-3 text-sm"
-                >
+                <button onClick={handleSaveLoss} disabled={savingLoss}
+                  className="btn-primary flex-1 py-3 text-sm">
                   {savingLoss ? 'Guardando...' : 'Confirmar baja'}
                 </button>
                 <button onClick={() => setShowLossForm(false)} className="btn-secondary px-3">
@@ -457,7 +395,6 @@ export default function Dashboard() {
           )}
         </div>
 
-        {/* Insumos */}
         <div>
           <div className="flex items-center justify-between mb-3">
             <h3 className="font-semibold text-gray-700 text-sm uppercase tracking-wide">Insumos</h3>
@@ -465,8 +402,6 @@ export default function Dashboard() {
           </div>
 
           <div className="space-y-2">
-
-            {/* Alimento — botón abrir bolsa */}
             {feedItem && (
               <div className="bg-white rounded-2xl border border-gray-200 p-4 flex items-center justify-between">
                 <div>
@@ -487,7 +422,6 @@ export default function Dashboard() {
               </div>
             )}
 
-            {/* Otros insumos — botón Usar */}
             {otherItems.map(item => (
               <div key={item.id} className="bg-white rounded-2xl border border-gray-200 p-4 flex items-center justify-between">
                 <div>
@@ -506,10 +440,7 @@ export default function Dashboard() {
                     >
                       Confirmar
                     </button>
-                    <button
-                      onClick={() => setConfirmStock(null)}
-                      className="btn-secondary px-3 py-2"
-                    >
+                    <button onClick={() => setConfirmStock(null)} className="btn-secondary px-3 py-2">
                       <X className="w-4 h-4" />
                     </button>
                   </div>
@@ -525,54 +456,33 @@ export default function Dashboard() {
             ))}
           </div>
 
-          {/* Formulario cantidad */}
           {showStockForm && (
             <div className="bg-white rounded-2xl border border-gray-200 p-4 space-y-4 mt-2">
               <div>
                 <label className="text-sm text-gray-600 mb-1 block">Insumo</label>
-                <select
-                  className="input-base"
-                  value={selectedStock}
-                  onChange={e => setSelectedStock(e.target.value)}
-                >
+                <select className="input-base" value={selectedStock}
+                  onChange={e => setSelectedStock(e.target.value)}>
                   {otherItems.map(i => (
-                    <option key={i.id} value={i.id}>
-                      {i.name} — {i.current_quantity} {i.unit}
-                    </option>
+                    <option key={i.id} value={i.id}>{i.name} — {i.current_quantity} {i.unit}</option>
                   ))}
                 </select>
               </div>
               <div>
                 <label className="text-sm text-gray-600 mb-1 block">Cantidad usada</label>
-                <input
-                  type="number"
-                  min="1"
-                  className="input-base"
-                  value={stockQty}
-                  onChange={e => setStockQty(Math.max(1, Number(e.target.value)))}
-                />
+                <input type="number" min="1" className="input-base" value={stockQty}
+                  onChange={e => setStockQty(Math.max(1, Number(e.target.value)))} />
               </div>
               <div>
                 <label className="text-sm text-gray-600 mb-1 block">Nota (opcional)</label>
-                <input
-                  className="input-base"
-                  placeholder="Ej: limpieza bebederos..."
-                  value={stockNotes}
-                  onChange={e => setStockNotes(e.target.value)}
-                />
+                <input className="input-base" placeholder="Ej: limpieza bebederos..."
+                  value={stockNotes} onChange={e => setStockNotes(e.target.value)} />
               </div>
               <div className="flex gap-2">
-                <button
-                  onClick={handleStockConsume}
-                  disabled={savingStock}
-                  className="btn-primary flex-1 py-3 text-sm"
-                >
+                <button onClick={handleStockConsume} disabled={savingStock}
+                  className="btn-primary flex-1 py-3 text-sm">
                   {savingStock ? 'Guardando...' : 'Confirmar uso'}
                 </button>
-                <button
-                  onClick={() => setShowStockForm(false)}
-                  className="btn-secondary px-3"
-                >
+                <button onClick={() => setShowStockForm(false)} className="btn-secondary px-3">
                   <X className="w-4 h-4" />
                 </button>
               </div>

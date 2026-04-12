@@ -4,6 +4,9 @@ import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import Header from '@/components/Header';
 import { Plus, X } from 'lucide-react';
+// 1. Nuevos imports
+import { useAuth } from '@/contexts/AuthContext';
+import { useRouter } from 'next/navigation';
 
 type Profile = { full_name: string; role: 'owner' | 'collaborator' };
 type Lot = {
@@ -23,7 +26,10 @@ type Loss = {
 };
 
 export default function Lotes() {
-  const [profile, setProfile] = useState<Profile | null>(null);
+  // 2. Hook de autenticación (reemplaza al useState de profile)
+  const { user, profile, loading: authLoading } = useAuth();
+  const router = useRouter();
+
   const [lots, setLots] = useState<Lot[]>([]);
   const [losses, setLosses] = useState<Loss[]>([]);
   const [weekRecords, setWeekRecords] = useState<{ date: string; docenas_armadas: number; huevos_rotos: number }[]>([]);
@@ -36,17 +42,9 @@ export default function Lotes() {
   const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(true);
 
+  // 3. Función loadData limpia (solo carga datos de la granja)
   const loadData = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) { window.location.href = '/'; return; }
-
-    const { data: profileData } = await supabase
-      .from('profiles').select('full_name, role')
-      .eq('id', user.id).single();
-    if (!profileData || profileData.role !== 'owner') {
-      window.location.href = '/dashboard'; return;
-    }
-    setProfile(profileData);
+    setLoading(true);
 
     const { data: lotsData } = await supabase
       .from('lots').select('*').order('start_date', { ascending: false });
@@ -68,14 +66,20 @@ export default function Lotes() {
     setLoading(false);
   };
 
-  useEffect(() => { loadData(); }, []);
+  // 4. useEffect Guardián
+  useEffect(() => {
+    if (authLoading) return;
+    if (!user || !profile) { router.push('/'); return; }
+    if (profile.role !== 'owner') { router.push('/dashboard'); return; }
+    
+    loadData();
+  }, [authLoading, user, profile]);
 
   const handleNewLot = async () => {
-    if (!newCode.trim() || newQty <= 0) return;
+    if (!newCode.trim() || newQty <= 0 || !user) return;
     setSaving(true);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
 
+    // Usamos el ID del usuario que viene del contexto
     await supabase.from('lots').insert({
       code: newCode.trim(),
       start_date: newDate,
@@ -110,11 +114,12 @@ export default function Lotes() {
     return Math.round(promedioTotal * 100);
   };
 
-  if (loading) return (
+  if (authLoading || loading) return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center">
       <p className="text-gray-400">Cargando...</p>
     </div>
   );
+
   if (!profile) return null;
 
   return (

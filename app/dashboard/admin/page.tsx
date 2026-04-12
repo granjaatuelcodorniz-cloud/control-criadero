@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
+import { useAuth } from '@/contexts/AuthContext';
+import { useRouter } from 'next/navigation';
 import Header from '@/components/Header';
 import Link from 'next/link';
 import {
@@ -9,7 +11,6 @@ import {
   AlertTriangle, CheckCircle, Clock, Egg,
 } from 'lucide-react';
 
-type Profile = { full_name: string; role: 'owner' | 'collaborator' };
 type DailyRecord = {
   date: string;
   registered_at: string | null;
@@ -29,7 +30,8 @@ type FertileRecord = {
 type Alert = { type: 'danger' | 'warning' | 'ok'; message: string };
 
 export default function AdminDashboard() {
-  const [profile, setProfile] = useState<Profile | null>(null);
+  const { user, profile, loading: authLoading } = useAuth();
+  const router = useRouter();
   const [todayRecord, setTodayRecord] = useState<DailyRecord | null>(null);
   const [todayFertile, setTodayFertile] = useState<FertileRecord | null>(null);
   const [weekRecords, setWeekRecords] = useState<DailyRecord[]>([]);
@@ -39,84 +41,78 @@ export default function AdminDashboard() {
 
   const today = new Date().toISOString().split('T')[0];
 
+  const load = async () => {
+    // Registro consumo hoy
+    const { data: todayData } = await supabase
+      .from('daily_records').select('*')
+      .eq('date', today)
+      .order('created_at', { ascending: false })
+      .limit(1);
+    if (todayData && todayData.length > 0) setTodayRecord(todayData[0]);
+
+    // Registro fértiles hoy
+    const { data: fertileData } = await supabase
+      .from('fertile_records').select('*')
+      .eq('date', today)
+      .order('created_at', { ascending: false })
+      .limit(1);
+    if (fertileData && fertileData.length > 0) setTodayFertile(fertileData[0]);
+
+    // Últimos 7 días
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
+    const { data: weekData } = await supabase
+      .from('daily_records')
+      .select('date, registered_at, bandejas_consumo, bandejas_fertiles, docenas_armadas, huevos_rotos, notas')
+      .gte('date', sevenDaysAgo.toISOString().split('T')[0])
+      .order('date');
+    if (weekData) setWeekRecords(weekData);
+
+    // Total aves activas
+    const { data: lotsData } = await supabase
+      .from('lots').select('current_quantity');
+    if (lotsData) setTotalAves(lotsData.reduce((s, l) => s + l.current_quantity, 0));
+
+    // Alertas
+    const newAlerts: Alert[] = [];
+
+    const { data: stockData } = await supabase
+      .from('stock_items').select('name, unit, current_quantity, alert_threshold');
+    if (stockData) {
+      stockData.forEach(item => {
+        if (item.current_quantity <= item.alert_threshold) {
+          newAlerts.push({
+            type: item.current_quantity === 0 ? 'danger' : 'warning',
+            message: `Stock de ${item.name} bajo mínimo (${item.current_quantity} ${item.unit ?? ''})`
+          });
+        }
+      });
+    }
+
+    const { data: urgentTasks } = await supabase
+      .from('tasks').select('description')
+      .eq('is_urgent', true).eq('is_active', true);
+    if (urgentTasks) {
+      urgentTasks.forEach(t => {
+        newAlerts.push({ type: 'danger', message: `Tarea urgente: ${t.description}` });
+      });
+    }
+
+    if (newAlerts.length === 0) {
+      newAlerts.push({ type: 'ok', message: 'Todo en orden por ahora' });
+    }
+    setAlerts(newAlerts);
+    setLoading(false);
+  };
+
   useEffect(() => {
-    const load = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) { window.location.href = '/'; return; }
-
-      const { data: profileData } = await supabase
-        .from('profiles').select('full_name, role')
-        .eq('id', user.id).single();
-      if (!profileData || profileData.role !== 'owner') {
-        window.location.href = '/dashboard'; return;
-      }
-      setProfile(profileData);
-
-      // Registro consumo hoy
-      const { data: todayData } = await supabase
-       .from('daily_records').select('*')     .eq('date', today)
-       .order('created_at', { ascending: false })
-       .limit(1);
-      if (todayData && todayData.length > 0) setTodayRecord(todayData[0]);
-
-      // Registro fértiles hoy
-      const { data: fertileData } = await supabase
-        .from('fertile_records').select('*')
-        .eq('date', today)
-        .order('created_at', { ascending: false })
-        .limit(1);
-      if (fertileData && fertileData.length > 0) setTodayFertile(fertileData[0]);
-
-      // Últimos 7 días
-      const sevenDaysAgo = new Date();
-      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
-      const { data: weekData } = await supabase
-        .from('daily_records')
-        .select('date, registered_at, bandejas_consumo, bandejas_fertiles, docenas_armadas, huevos_rotos, notas')
-        .gte('date', sevenDaysAgo.toISOString().split('T')[0])
-        .order('date');
-      if (weekData) setWeekRecords(weekData);
-
-      // Total aves activas
-      const { data: lotsData } = await supabase
-        .from('lots').select('current_quantity');
-      if (lotsData) setTotalAves(lotsData.reduce((s, l) => s + l.current_quantity, 0));
-
-      // Alertas
-      const newAlerts: Alert[] = [];
-
-      const { data: stockData } = await supabase
-        .from('stock_items').select('name, unit, current_quantity, alert_threshold');
-      if (stockData) {
-        stockData.forEach(item => {
-          if (item.current_quantity <= item.alert_threshold) {
-            newAlerts.push({
-              type: item.current_quantity === 0 ? 'danger' : 'warning',
-              message: `Stock de ${item.name} bajo mínimo (${item.current_quantity} ${item.unit ?? ''})`
-            });
-          }
-        });
-      }
-
-      const { data: urgentTasks } = await supabase
-        .from('tasks').select('description')
-        .eq('is_urgent', true).eq('is_active', true);
-      if (urgentTasks) {
-        urgentTasks.forEach(t => {
-          newAlerts.push({ type: 'danger', message: `Tarea urgente: ${t.description}` });
-        });
-      }
-
-      if (newAlerts.length === 0) {
-        newAlerts.push({ type: 'ok', message: 'Todo en orden por ahora' });
-      }
-      setAlerts(newAlerts);
-      setLoading(false);
-    };
+    if (authLoading) return;
+    if (!user || !profile) { router.push('/'); return; }
+    if (profile.role !== 'owner') { router.push('/dashboard'); return; }
     load();
-  }, []);
+  }, [authLoading, user, profile]);
 
-  if (loading) return (
+  if (authLoading || loading) return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center">
       <p className="text-gray-400">Cargando...</p>
     </div>
@@ -164,7 +160,7 @@ export default function AdminDashboard() {
 
   const dias = ['L', 'M', 'X', 'J', 'V', 'S', 'D'];
 
- const navCards = [
+  const navCards = [
     { href: '/dashboard/admin/lotes', icon: TrendingUp, label: 'Lotes', color: 'text-green-600', bg: 'bg-green-50' },
     { href: '/dashboard/admin/stock', icon: Package, label: 'Stock', color: 'text-blue-600', bg: 'bg-blue-50' },
     { href: '/dashboard/admin/sanidad', icon: Heart, label: 'Sanidad', color: 'text-red-500', bg: 'bg-red-50' },
@@ -177,7 +173,6 @@ export default function AdminDashboard() {
 
       <div className="max-w-2xl mx-auto px-4 py-6 space-y-6">
 
-        {/* Bienvenida */}
         <div>
           <h2 className="text-2xl font-bold text-gray-900">Hola, {profile.full_name} 👋</h2>
           <p className="text-gray-500 text-sm mt-1">
@@ -185,12 +180,10 @@ export default function AdminDashboard() {
           </p>
         </div>
 
-        {/* Registro consumo hoy */}
+        {/* Consumo hoy */}
         <div>
           <div className="flex items-center justify-between mb-3">
-            <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide">
-              Consumo — hoy
-            </h3>
+            <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Consumo — hoy</h3>
             {todayRecord?.registered_at && (
               <span className="text-xs text-gray-400 flex items-center gap-1">
                 <Clock className="w-3 h-3" />
@@ -214,8 +207,6 @@ export default function AdminDashboard() {
                   </div>
                 ))}
               </div>
-
-              {/* Porcentajes consumo */}
               <div className="bg-white rounded-2xl border border-gray-100 p-4">
                 <p className="text-xs text-gray-400 mb-3">Indicadores consumo</p>
                 <div className="grid grid-cols-3 gap-3">
@@ -233,7 +224,6 @@ export default function AdminDashboard() {
                   ))}
                 </div>
               </div>
-
               {todayRecord.notas && (
                 <div className="bg-yellow-50 rounded-2xl border border-yellow-100 px-4 py-3">
                   <p className="text-xs text-yellow-600 font-medium mb-1">Nota de hoy</p>
@@ -249,12 +239,10 @@ export default function AdminDashboard() {
           )}
         </div>
 
-        {/* Registro fértiles hoy */}
+        {/* Fértiles hoy */}
         <div>
           <div className="flex items-center justify-between mb-3">
-            <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide">
-              Fértiles — hoy
-            </h3>
+            <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Fértiles — hoy</h3>
             {todayFertile?.registered_at && (
               <span className="text-xs text-gray-400 flex items-center gap-1">
                 <Clock className="w-3 h-3" />
@@ -277,7 +265,6 @@ export default function AdminDashboard() {
                   </div>
                 ))}
               </div>
-
               <div className="bg-white rounded-2xl border border-gray-100 p-4">
                 <p className="text-xs text-gray-400 mb-3">Indicadores fértiles</p>
                 <div className="grid grid-cols-2 gap-3">
@@ -384,7 +371,6 @@ export default function AdminDashboard() {
           </div>
         </div>
 
-        {/* Acceso registro */}
         <Link href="/dashboard/huevos" className="btn-primary w-full py-4 text-base rounded-2xl">
           <Egg className="w-5 h-5" />
           Registrar huevos

@@ -4,8 +4,10 @@ import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import Header from '@/components/Header';
 import { Plus, X, Pencil, Check, Trash2 } from 'lucide-react';
+// 1. Integración de Auth y Navegación
+import { useAuth } from '@/contexts/AuthContext';
+import { useRouter } from 'next/navigation';
 
-type Profile = { full_name: string; role: 'owner' | 'collaborator' };
 type StockItem = {
   id: number;
   name: string;
@@ -16,6 +18,7 @@ type StockItem = {
   kg_por_bolsa: number | null;
   bolsas_restantes: number | null;
 };
+
 type Movement = {
   id: number;
   date: string;
@@ -26,7 +29,9 @@ type Movement = {
 };
 
 export default function Stock() {
-  const [profile, setProfile] = useState<Profile | null>(null);
+  const { user, profile, loading: authLoading } = useAuth();
+  const router = useRouter();
+
   const [items, setItems] = useState<StockItem[]>([]);
   const [movements, setMovements] = useState<Movement[]>([]);
   const [selectedItem, setSelectedItem] = useState('');
@@ -38,34 +43,30 @@ export default function Stock() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editThreshold, setEditThreshold] = useState(0);
   const [editUnit, setEditUnit] = useState('');
+  
   // Entrega de alimento
   const [showFeedForm, setShowFeedForm] = useState(false);
   const [feedKg, setFeedKg] = useState('');
   const [feedBolsas, setFeedBolsas] = useState('');
   const [feedDate, setFeedDate] = useState(new Date().toISOString().split('T')[0]);
+  
   // Nuevo insumo
   const [newName, setNewName] = useState('');
   const [newUnit, setNewUnit] = useState('');
   const [newQty, setNewQty] = useState(0);
   const [newThreshold, setNewThreshold] = useState(0);
+  
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(true);
 
+  // 2. Carga de datos optimizada
   const loadData = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) { window.location.href = '/'; return; }
-
-    const { data: profileData } = await supabase
-      .from('profiles').select('full_name, role')
-      .eq('id', user.id).single();
-    if (!profileData || profileData.role !== 'owner') {
-      window.location.href = '/dashboard'; return;
-    }
-    setProfile(profileData);
-
+    setLoading(true);
+    
     const { data: itemsData } = await supabase
       .from('stock_items').select('*').order('name');
+    
     if (itemsData) {
       setItems(itemsData);
       const nonFeed = itemsData.find(i => !i.is_feed);
@@ -75,18 +76,24 @@ export default function Stock() {
     const { data: movData } = await supabase
       .from('stock_movements').select('*')
       .order('date', { ascending: false }).limit(20);
+    
     if (movData) setMovements(movData);
 
     setLoading(false);
   };
 
-  useEffect(() => { loadData(); }, []);
+  // 3. Guardián de acceso
+  useEffect(() => {
+    if (authLoading) return;
+    if (!user || !profile) { router.push('/'); return; }
+    if (profile.role !== 'owner') { router.push('/dashboard'); return; }
+
+    loadData();
+  }, [authLoading, user, profile]);
 
   const handleMovement = async () => {
-    if (!selectedItem || movQty <= 0) return;
+    if (!selectedItem || movQty <= 0 || !user) return;
     setSaving(true);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
 
     const item = items.find(i => String(i.id) === selectedItem);
     if (!item) return;
@@ -118,10 +125,8 @@ export default function Stock() {
   };
 
   const handleFeedDelivery = async () => {
-    if (!feedKg || !feedBolsas) return;
+    if (!feedKg || !feedBolsas || !user) return;
     setSaving(true);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
 
     const feedItem = items.find(i => i.is_feed);
     if (!feedItem) return;
@@ -155,10 +160,8 @@ export default function Stock() {
   };
 
   const handleOpenBolsa = async (feedItem: StockItem) => {
-    if (!feedItem.kg_por_bolsa || !feedItem.bolsas_restantes) return;
+    if (!feedItem.kg_por_bolsa || !feedItem.bolsas_restantes || !user) return;
     setSaving(true);
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
 
     const newKg = Math.max(0, feedItem.current_quantity - feedItem.kg_por_bolsa);
     const newBolsas = Math.max(0, feedItem.bolsas_restantes - 1);
@@ -231,18 +234,19 @@ export default function Stock() {
     return Math.min(100, Math.round((item.current_quantity / max) * 100));
   };
 
-   const handleDeleteItem = async (id: number) => {
-   if (!confirm('¿Eliminar este insumo? Se perderá el historial de movimientos.')) return;
-   await supabase.from('stock_movements').delete().eq('stock_item_id', id);
-   await supabase.from('stock_items').delete().eq('id', id);
-   await loadData();
+  const handleDeleteItem = async (id: number) => {
+    if (!confirm('¿Eliminar este insumo? Se perderá el historial de movimientos.')) return;
+    await supabase.from('stock_movements').delete().eq('stock_item_id', id);
+    await supabase.from('stock_items').delete().eq('id', id);
+    await loadData();
   };
 
-  if (loading) return (
+  if (authLoading || loading) return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center">
       <p className="text-gray-400">Cargando...</p>
     </div>
   );
+
   if (!profile) return null;
 
   const feedItem = items.find(i => i.is_feed);
@@ -422,7 +426,7 @@ export default function Stock() {
           </div>
         </div>
 
-        {/* Registrar movimiento otros insumos */}
+        {/* REGISTRAR MOVIMIENTO */}
         {!showMovForm ? (
           <button onClick={() => setShowMovForm(true)}
             className="btn-primary w-full py-3 text-sm">
@@ -476,7 +480,7 @@ export default function Stock() {
           </div>
         )}
 
-        {/* Historial */}
+        {/* HISTORIAL */}
         {movements.length > 0 && (
           <div>
             <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">
@@ -504,7 +508,7 @@ export default function Stock() {
           </div>
         )}
 
-        {/* Agregar insumo */}
+        {/* AGREGAR INSUMO */}
         {!showNewItem ? (
           <button onClick={() => setShowNewItem(true)}
             className="w-full py-3 rounded-2xl border-2 border-dashed border-gray-200 text-gray-400 hover:border-yellow-300 hover:text-yellow-500 transition-all flex items-center justify-center gap-2 text-sm">

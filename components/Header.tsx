@@ -3,8 +3,8 @@
 import Image from 'next/image';
 import Link from 'next/link';
 import { LogOut } from 'lucide-react';
-import { supabase } from '@/lib/supabase';
-import { useRouter } from 'next/navigation';
+// 1. Importamos el hook del contexto
+import { useAuth } from '@/contexts/AuthContext';
 
 type Props = {
   userName: string;
@@ -14,11 +14,15 @@ type Props = {
 };
 
 export default function Header({ userName, role, backHref, backLabel }: Props) {
-  const router = useRouter();
+  // 2. Extraemos signOut del contexto
+  const { signOut } = useAuth();
 
   const handleLogout = async () => {
-    await supabase.auth.signOut();
-    router.push('/');
+    try {
+      await signOut();
+    } catch (error) {
+      console.error('Error al cerrar sesión:', error);
+    }
   };
 
   return (
