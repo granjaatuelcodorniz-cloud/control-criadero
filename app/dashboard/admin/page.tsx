@@ -6,10 +6,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useRouter } from 'next/navigation';
 import Header from '@/components/Header';
 import Link from 'next/link';
-import {
-  TrendingUp, Package, Heart, ClipboardList,
-  AlertTriangle, CheckCircle, Clock, Egg,
-} from 'lucide-react';
+import { TrendingUp, Package, Heart, ClipboardList, BarChart2 } from 'lucide-react';
 
 type DailyRecord = {
   date: string;
@@ -165,6 +162,7 @@ export default function AdminDashboard() {
     { href: '/dashboard/admin/stock', icon: Package, label: 'Stock', color: 'text-blue-600', bg: 'bg-blue-50' },
     { href: '/dashboard/admin/sanidad', icon: Heart, label: 'Sanidad', color: 'text-red-500', bg: 'bg-red-50' },
     { href: '/dashboard/admin/tareas', icon: ClipboardList, label: 'Tareas', color: 'text-purple-600', bg: 'bg-purple-50' },
+    { href: '/dashboard/admin/analisis', icon: BarChart2, label: 'Análisis', color: 'text-yellow-600', bg: 'bg-yellow-50' },
   ];
 
   return (
