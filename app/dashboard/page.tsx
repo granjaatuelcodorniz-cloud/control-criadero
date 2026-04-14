@@ -50,10 +50,6 @@ export default function Dashboard() {
   const [savingLoss, setSavingLoss] = useState(false);
   const [lossSaved, setLossSaved] = useState(false);
   const [stockItems, setStockItems] = useState<StockItem[]>([]);
-  const [selectedStock, setSelectedStock] = useState('');
-  const [stockQty, setStockQty] = useState(1);
-  const [stockNotes, setStockNotes] = useState('');
-  const [showStockForm, setShowStockForm] = useState(false);
   const [stockSaved, setStockSaved] = useState(false);
   const [savingStock, setSavingStock] = useState(false);
   const [confirmStock, setConfirmStock] = useState<number | null>(null);
@@ -103,11 +99,7 @@ export default function Dashboard() {
       .from('stock_items')
       .select('id, name, unit, current_quantity, is_feed, bolsas_restantes, kg_por_bolsa')
       .order('name');
-    if (stockData) {
-      setStockItems(stockData);
-      const nonFeed = stockData.find(i => !i.is_feed);
-      if (nonFeed) setSelectedStock(String(nonFeed.id));
-    }
+    if (stockData) setStockItems(stockData);
 
     setLoading(false);
   };
@@ -151,48 +143,13 @@ export default function Dashboard() {
 
   const handleAddExtraTask = async () => {
     if (!extraTaskDesc.trim() || !user) return;
-
     await supabase.from('tasks').insert({
       description: extraTaskDesc.trim(),
       type: 'custom', is_active: true,
       created_by: user.id, assigned_to: user.id,
     });
-
     setExtraTaskDesc('');
     setShowExtraTask(false);
-    await loadData();
-  };
-
-  const handleStockConsume = async () => {
-    if (!selectedStock || stockQty <= 0 || !user) return;
-    setSavingStock(true);
-
-    const item = stockItems.find(i => String(i.id) === selectedStock);
-    if (!item) { setSavingStock(false); return; }
-
-    const { error: movError } = await supabase.from('stock_movements').insert({
-      stock_item_id: Number(selectedStock),
-      quantity: stockQty, movement_type: 'salida',
-      notes: stockNotes.trim() || null,
-      user_id: user.id, date: today,
-    });
-
-    if (movError) {
-      alert('Error: ' + movError.message);
-      setSavingStock(false);
-      return;
-    }
-
-    await supabase.from('stock_items')
-      .update({ current_quantity: Math.max(0, item.current_quantity - stockQty) })
-      .eq('id', Number(selectedStock));
-
-    setStockQty(1);
-    setStockNotes('');
-    setShowStockForm(false);
-    setSavingStock(false);
-    setStockSaved(true);
-    setTimeout(() => setStockSaved(false), 3000);
     await loadData();
   };
 
@@ -200,6 +157,7 @@ export default function Dashboard() {
     const feedItem = stockItems.find(i => i.is_feed);
     if (!feedItem?.kg_por_bolsa || !feedItem?.bolsas_restantes || !user) return;
     setSavingStock(true);
+    setConfirmStock(null);
 
     await supabase.from('stock_items').update({
       current_quantity: Math.max(0, feedItem.current_quantity - feedItem.kg_por_bolsa),
@@ -213,6 +171,29 @@ export default function Dashboard() {
       notes: 'Bolsa abierta',
       user_id: user.id, date: today,
     });
+
+    setSavingStock(false);
+    setStockSaved(true);
+    setTimeout(() => setStockSaved(false), 3000);
+    await loadData();
+  };
+
+  const handleUseItem = async (item: StockItem) => {
+    if (!user) return;
+    setSavingStock(true);
+    setConfirmStock(null);
+
+    await supabase.from('stock_movements').insert({
+      stock_item_id: item.id,
+      quantity: 1,
+      movement_type: 'salida',
+      user_id: user.id,
+      date: today,
+    });
+
+    await supabase.from('stock_items')
+      .update({ current_quantity: Math.max(0, item.current_quantity - 1) })
+      .eq('id', item.id);
 
     setSavingStock(false);
     setStockSaved(true);
@@ -395,6 +376,7 @@ export default function Dashboard() {
           )}
         </div>
 
+        {/* Insumos */}
         <div>
           <div className="flex items-center justify-between mb-3">
             <h3 className="font-semibold text-gray-700 text-sm uppercase tracking-wide">Insumos</h3>
@@ -402,6 +384,8 @@ export default function Dashboard() {
           </div>
 
           <div className="space-y-2">
+
+            {/* Alimento */}
             {feedItem && (
               <div className="bg-white rounded-2xl border border-gray-200 p-4 flex items-center justify-between">
                 <div>
@@ -412,16 +396,32 @@ export default function Dashboard() {
                       : `${feedItem.current_quantity} kg`}
                   </p>
                 </div>
-                <button
-                  onClick={handleOpenBolsa}
-                  disabled={savingStock || !feedItem.bolsas_restantes}
-                  className="btn-primary px-4 py-2 text-sm"
-                >
-                  {savingStock ? '...' : 'Abrí una bolsa'}
-                </button>
+                {confirmStock === feedItem.id ? (
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleOpenBolsa}
+                      disabled={savingStock}
+                      className="btn-primary px-4 py-2 text-sm"
+                    >
+                      {savingStock ? '...' : 'Confirmar'}
+                    </button>
+                    <button onClick={() => setConfirmStock(null)} className="btn-secondary px-3 py-2">
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setConfirmStock(feedItem.id)}
+                    disabled={!feedItem.bolsas_restantes}
+                    className="btn-primary px-4 py-2 text-sm"
+                  >
+                    Abrí una bolsa
+                  </button>
+                )}
               </div>
             )}
 
+            {/* Otros insumos */}
             {otherItems.map(item => (
               <div key={item.id} className="bg-white rounded-2xl border border-gray-200 p-4 flex items-center justify-between">
                 <div>
@@ -431,14 +431,11 @@ export default function Dashboard() {
                 {confirmStock === item.id ? (
                   <div className="flex gap-2">
                     <button
-                      onClick={() => {
-                        setSelectedStock(String(item.id));
-                        setShowStockForm(true);
-                        setConfirmStock(null);
-                      }}
-                      className="btn-primary px-3 py-2 text-sm"
+                      onClick={() => handleUseItem(item)}
+                      disabled={savingStock}
+                      className="btn-primary px-4 py-2 text-sm"
                     >
-                      Confirmar
+                      {savingStock ? '...' : 'Confirmar'}
                     </button>
                     <button onClick={() => setConfirmStock(null)} className="btn-secondary px-3 py-2">
                       <X className="w-4 h-4" />
@@ -454,40 +451,8 @@ export default function Dashboard() {
                 )}
               </div>
             ))}
-          </div>
 
-          {showStockForm && (
-            <div className="bg-white rounded-2xl border border-gray-200 p-4 space-y-4 mt-2">
-              <div>
-                <label className="text-sm text-gray-600 mb-1 block">Insumo</label>
-                <select className="input-base" value={selectedStock}
-                  onChange={e => setSelectedStock(e.target.value)}>
-                  {otherItems.map(i => (
-                    <option key={i.id} value={i.id}>{i.name} — {i.current_quantity} {i.unit}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="text-sm text-gray-600 mb-1 block">Cantidad usada</label>
-                <input type="number" min="1" className="input-base" value={stockQty}
-                  onChange={e => setStockQty(Math.max(1, Number(e.target.value)))} />
-              </div>
-              <div>
-                <label className="text-sm text-gray-600 mb-1 block">Nota (opcional)</label>
-                <input className="input-base" placeholder="Ej: limpieza bebederos..."
-                  value={stockNotes} onChange={e => setStockNotes(e.target.value)} />
-              </div>
-              <div className="flex gap-2">
-                <button onClick={handleStockConsume} disabled={savingStock}
-                  className="btn-primary flex-1 py-3 text-sm">
-                  {savingStock ? 'Guardando...' : 'Confirmar uso'}
-                </button>
-                <button onClick={() => setShowStockForm(false)} className="btn-secondary px-3">
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-          )}
+          </div>
         </div>
 
       </div>
