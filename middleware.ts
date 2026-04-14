@@ -25,28 +25,16 @@ export async function middleware(request: NextRequest) {
     }
   )
 
-  const { data: { user } } = await supabase.auth.getUser()
+  // Refrescar sesión — esto es lo más importante
+  await supabase.auth.getUser()
 
   const { pathname } = request.nextUrl
 
-  // Si no está autenticado y no está en login, redirigir al login
-  if (!user && pathname !== '/') {
-    return NextResponse.redirect(new URL('/', request.url))
-  }
-
-  // Si está autenticado y está en login, redirigir al dashboard
-  if (user && pathname === '/') {
-    // Obtenemos el perfil para saber a qué dashboard redirigir
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('role')
-      .eq('id', user.id)
-      .single()
-
-    if (profile?.role === 'owner') {
-      return NextResponse.redirect(new URL('/dashboard/admin', request.url))
-    } else {
-      return NextResponse.redirect(new URL('/dashboard', request.url))
+  // Rutas protegidas — si no hay sesión, redirigir al login
+  if (pathname.startsWith('/dashboard')) {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) {
+      return NextResponse.redirect(new URL('/', request.url))
     }
   }
 

@@ -16,7 +16,7 @@ export default function Login() {
     setLoading(true);
     setError('');
 
-    const { error: signInError } = await supabase.auth.signInWithPassword({
+    const { data, error: signInError } = await supabase.auth.signInWithPassword({
       email: email.trim(),
       password,
     });
@@ -24,8 +24,23 @@ export default function Login() {
     if (signInError) {
       setError('Email o contraseña incorrectos. Verificá los datos.');
       setLoading(false);
+      return;
     }
-    // El middleware se encarga de la redirección
+
+    if (data.user) {
+      // Obtener perfil para redirigir al lugar correcto
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', data.user.id)
+        .single();
+
+      if (profile?.role === 'owner') {
+        window.location.href = '/dashboard/admin';
+      } else {
+        window.location.href = '/dashboard';
+      }
+    }
   };
 
   return (
@@ -51,19 +66,18 @@ export default function Login() {
             <input
               type="email"
               value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              onChange={e => setEmail(e.target.value)}
               className="input-base"
               placeholder="tu@email.com"
               required
             />
           </div>
-
           <div>
             <label className="block text-sm font-medium mb-2">Contraseña</label>
             <input
               type="password"
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              onChange={e => setPassword(e.target.value)}
               className="input-base"
               placeholder="Tu contraseña"
               required
