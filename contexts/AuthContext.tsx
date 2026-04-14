@@ -1,7 +1,7 @@
 'use client';
 
-import { createContext, useContext, useEffect, useState } from 'react';
-import { supabase } from '@/lib/supabase';
+import { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import { createClient } from '@/lib/supabase';
 import { User } from '@supabase/supabase-js';
 
 type Profile = {
@@ -23,76 +23,33 @@ const AuthContext = createContext<AuthContextType>({
   signOut: async () => {},
 });
 
-const PROFILE_KEY = 'cc_profile';
-
-function getCachedProfile(): Profile | null {
-  try {
-    const raw = localStorage.getItem(PROFILE_KEY);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
-}
-
-function setCachedProfile(profile: Profile) {
-  try {
-    localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
-  } catch {}
-}
-
-function clearCachedProfile() {
-  try {
-    localStorage.removeItem(PROFILE_KEY);
-  } catch {}
-}
-
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const cached = getCachedProfile();
   const [user, setUser] = useState<User | null>(null);
-  const [profile, setProfile] = useState<Profile | null>(cached);
-  const [loading, setLoading] = useState(!cached); // si hay caché, arranca sin loading
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [loading, setLoading] = useState(true);
+  const supabase = createClient();
 
-  const loadProfile = async (userId: string): Promise<Profile | null> => {
-    try {
-      const { data } = await supabase
-        .from('profiles')
-        .select('full_name, role')
-        .eq('id', userId)
-        .single();
-      if (data) {
-        setCachedProfile(data);
-        setProfile(data);
-        return data;
-      }
-    } catch {}
-    return null;
-  };
+  const loadProfile = useCallback(async (userId: string) => {
+    const { data } = await supabase
+      .from('profiles')
+      .select('full_name, role')
+      .eq('id', userId)
+      .single();
+    if (data) setProfile(data);
+  }, []);
 
   useEffect(() => {
     let mounted = true;
 
     const init = async () => {
-      try {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!mounted) return;
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!mounted) return;
 
-        if (session?.user) {
-          setUser(session.user);
-          // Si no hay caché, cargamos el perfil
-          if (!getCachedProfile()) {
-            await loadProfile(session.user.id);
-          }
-        } else {
-          // No hay sesión — limpiamos todo
-          setUser(null);
-          setProfile(null);
-          clearCachedProfile();
-        }
-      } catch {
-        clearCachedProfile();
-      } finally {
-        if (mounted) setLoading(false);
+      if (user) {
+        setUser(user);
+        await loadProfile(user.id);
       }
+      setLoading(false);
     };
 
     init();
@@ -100,24 +57,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         if (!mounted) return;
-
         if (event === 'SIGNED_OUT') {
           setUser(null);
           setProfile(null);
-          clearCachedProfile();
           return;
         }
-
-        if (event === 'SIGNED_IN' && session?.user) {
+        if (session?.user) {
           setUser(session.user);
           await loadProfile(session.user.id);
-          return;
-        }
-
-        if (event === 'TOKEN_REFRESHED' && session?.user) {
-          setUser(session.user);
-          // Token renovado — no recargamos perfil, ya está en caché
-          return;
         }
       }
     );
@@ -129,10 +76,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signOut = async () => {
-    clearCachedProfile();
+    await supabase.auth.signOut();
     setUser(null);
     setProfile(null);
-    await supabase.auth.signOut();
     window.location.href = '/';
   };
 

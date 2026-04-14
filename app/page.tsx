@@ -1,25 +1,15 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { supabase } from '@/lib/supabase';
-import { useAuth } from '@/contexts/AuthContext';
+import { useState } from 'react';
+import { createClient } from '@/lib/supabase';
 import Image from 'next/image';
-import { useRouter } from 'next/navigation';
 
 export default function Login() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const router = useRouter();
-  const { user, profile, loading: authLoading } = useAuth();
-
-  useEffect(() => {
-    if (authLoading) return;
-    if (user && profile) {
-      router.push(profile.role === 'owner' ? '/dashboard/admin' : '/dashboard');
-    }
-  }, [user, profile, authLoading]);
+  const supabase = createClient();
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -35,13 +25,8 @@ export default function Login() {
       setError('Email o contraseña incorrectos. Verificá los datos.');
       setLoading(false);
     }
+    // El middleware se encarga de la redirección
   };
-
-  if (authLoading) return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-      <p className="text-gray-400">Cargando...</p>
-    </div>
-  );
 
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
