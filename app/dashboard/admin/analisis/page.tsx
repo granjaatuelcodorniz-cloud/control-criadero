@@ -49,8 +49,9 @@ export default function Analisis() {
   });
   const [dateTo, setDateTo] = useState(new Date().toISOString().split('T')[0]);
   const [rangeRecords, setRangeRecords] = useState<RangeRecord[]>([]);
+  const [rangeSearched, setRangeSearched] = useState(false);
 
-  // Mensual
+  // Resumen mensual
   const [selectedMonth, setSelectedMonth] = useState(() => {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
@@ -75,14 +76,12 @@ export default function Analisis() {
   }, [authLoading, user, profile, router]);
 
   const loadInitialData = async () => {
-    // Total aves
     const { data: lotsData } = await supabase
       .from('lots').select('current_quantity');
     if (lotsData) {
-      setTotalAves(lotsData.reduce((sum, l) => sum + (l.current_quantity || 0), 0));
+      setTotalAves(lotsData.reduce((s, l) => s + (l.current_quantity || 0), 0));
     }
 
-    // Cargar resumen del mes actual
     await loadMonth(selectedMonth);
   };
 
@@ -125,6 +124,7 @@ export default function Analisis() {
 
   const handleSearchRange = async () => {
     setLoading(true);
+    setRangeSearched(true);
 
     const { data } = await supabase
       .from('daily_records')
@@ -143,48 +143,59 @@ export default function Analisis() {
     await loadMonth(month);
   };
 
-  // Cálculos del día buscado
-  const totalConsumo = dayRecord ? (dayRecord.docenas_armadas * 12) + dayRecord.huevos_rotos : 0;
-  const pctPostura = totalAves > 0 && totalConsumo > 0 
-    ? Math.round((totalConsumo / totalAves) * 100) : null;
-  const pctRotos = totalConsumo > 0 && dayRecord 
-    ? Math.round((dayRecord.huevos_rotos / totalConsumo) * 100) : null;
-  const pctEmpletado = totalConsumo > 0 && dayRecord 
-    ? Math.round(((dayRecord.docenas_armadas * 12) / totalConsumo) * 100) : null;
+  // Cálculos día buscado
+  const totalConsumo = dayRecord
+    ? (dayRecord.docenas_armadas * 12) + dayRecord.huevos_rotos
+    : 0;
+  const pctPostura = totalAves > 0 && totalConsumo > 0
+    ? Math.round((totalConsumo / totalAves) * 100)
+    : null;
+  const pctRotos = totalConsumo > 0 && dayRecord
+    ? Math.round((dayRecord.huevos_rotos / totalConsumo) * 100)
+    : null;
+  const pctEmpletado = totalConsumo > 0 && dayRecord
+    ? Math.round(((dayRecord.docenas_armadas * 12) / totalConsumo) * 100)
+    : null;
 
-  // Cálculos del rango
+  // Cálculos rango
+  const totalDocenasRango = rangeRecords.reduce((s, r) => s + r.docenas_armadas, 0);
   const totalHuevosRango = rangeRecords.reduce((s, r) => s + (r.docenas_armadas * 12) + r.huevos_rotos, 0);
   const totalRotosRango = rangeRecords.reduce((s, r) => s + r.huevos_rotos, 0);
-  const pctRotosRango = totalHuevosRango > 0 ? Math.round((totalRotosRango / totalHuevosRango) * 100) : null;
-  const maxRango = rangeRecords.length > 0 
-    ? Math.max(...rangeRecords.map(r => (r.docenas_armadas * 12) + r.huevos_rotos), 1) : 1;
+  const pctRotosRango = totalHuevosRango > 0
+    ? Math.round((totalRotosRango / totalHuevosRango) * 100)
+    : null;
+  const maxRango = rangeRecords.length > 0
+    ? Math.max(...rangeRecords.map(r => (r.docenas_armadas * 12) + r.huevos_rotos), 1)
+    : 1;
 
-  // Cálculos mensuales
+  // Cálculos mes
   const totalDocenasMes = monthRecords.reduce((s, r) => s + r.docenas_armadas, 0);
   const totalHuevosMes = monthRecords.reduce((s, r) => s + (r.docenas_armadas * 12) + r.huevos_rotos, 0);
   const totalRotosMes = monthRecords.reduce((s, r) => s + r.huevos_rotos, 0);
   const diasConRegistro = monthRecords.length;
-  const promedioDocenasDia = diasConRegistro > 0 ? Math.round(totalDocenasMes / diasConRegistro) : 0;
-  const maxMes = monthRecords.length > 0 
-    ? Math.max(...monthRecords.map(r => (r.docenas_armadas * 12) + r.huevos_rotos), 1) : 1;
+  const promedioDocenasDia = diasConRegistro > 0
+    ? Math.round(totalDocenasMes / diasConRegistro)
+    : 0;
+  const maxMes = monthRecords.length > 0
+    ? Math.max(...monthRecords.map(r => (r.docenas_armadas * 12) + r.huevos_rotos), 1)
+    : 1;
 
   const dias = ['L', 'M', 'X', 'J', 'V', 'S', 'D'];
 
   const BarChart = ({ records, max }: { records: RangeRecord[]; max: number }) => (
-    <div className="flex items-end gap-1 h-28 overflow-x-auto pb-2">
+    <div className="flex items-end gap-1 h-28 overflow-x-auto pb-1">
       {records.map((r, i) => {
         const total = (r.docenas_armadas * 12) + r.huevos_rotos;
-        const height = Math.round((total / max) * 85);
-        const dayIdx = new Date(r.date).getDay();
+        const h = Math.round((total / max) * 80);
+        const dayIdx = new Date(r.date + 'T12:00:00').getDay();
         const dayLabel = dias[dayIdx === 0 ? 6 : dayIdx - 1];
         const isToday = r.date === new Date().toISOString().split('T')[0];
-
         return (
-          <div key={i} className="flex flex-col items-center gap-1 flex-shrink-0" style={{ minWidth: '28px' }}>
-            <span className="text-[10px] text-gray-400 font-medium">{total || ''}</span>
+          <div key={i} className="flex flex-col items-center gap-1 flex-shrink-0" style={{ minWidth: '24px' }}>
+            <span className="text-xs text-gray-400">{total > 0 ? total : ''}</span>
             <div
-              className={`w-6 rounded-t transition-all ${isToday ? 'bg-yellow-400' : 'bg-yellow-200'}`}
-              style={{ height: `${Math.max(height, 4)}px` }}
+              className={`w-full rounded-t-lg transition-all ${isToday ? 'bg-yellow-400' : 'bg-yellow-100'}`}
+              style={{ height: `${Math.max(h, 4)}px` }}
             />
             <span className="text-xs text-gray-400">{dayLabel}</span>
           </div>
@@ -210,69 +221,228 @@ export default function Analisis() {
         backLabel="Dashboard" 
       />
 
-      <div className="max-w-2xl mx-auto px-4 py-6 space-y-8">
+      <div className="max-w-2xl mx-auto px-4 py-6 space-y-6">
 
-        <h1 className="text-3xl font-bold text-gray-900">Análisis de Producción</h1>
+        <h2 className="text-2xl font-bold text-gray-900">Análisis de Producción</h2>
 
-        {/* Búsqueda por día */}
-        <div className="bg-white rounded-3xl border border-gray-100 p-6">
-          <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-            <Search className="w-5 h-5" /> Buscar por día específico
+        {/* BÚSQUEDA POR DÍA */}
+        <div>
+          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">
+            Buscar día
           </h3>
-          <div className="flex gap-3">
-            <input
-              type="date"
-              className="input-base flex-1"
-              value={searchDate}
-              max={new Date().toISOString().split('T')[0]}
-              onChange={(e) => setSearchDate(e.target.value)}
-            />
-            <button
-              onClick={handleSearchDay}
-              disabled={loading}
-              className="btn-primary px-8"
-            >
-              Buscar
-            </button>
-          </div>
-
-          {daySearched && (
-            <div className="mt-6">
-              {dayRecord ? (
-                <div className="space-y-4">
-                  <p className="text-sm font-medium text-gray-600">
-                    {new Date(searchDate).toLocaleDateString('es-AR', { 
-                      weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' 
-                    })}
-                    {dayRecord.registered_at && (
-                      <span className="text-gray-400 ml-2 text-xs">
-                        · {dayRecord.registered_at.slice(0, 5)}
-                      </span>
-                    )}
-                  </p>
-
-                  {/* Aquí puedes pegar el resto de tarjetas que ya tenías para el día */}
-                  <div className="grid grid-cols-2 gap-3">
-                    {/* Ejemplo de tarjetas - agrega las tuyas */}
-                    <div className="bg-gray-50 rounded-xl p-4">
-                      <p className="text-xs text-gray-400">Docenas armadas</p>
-                      <p className="text-2xl font-bold">{dayRecord.docenas_armadas}</p>
-                    </div>
-                    <div className="bg-gray-50 rounded-xl p-4">
-                      <p className="text-xs text-gray-400">Huevos rotos</p>
-                      <p className="text-2xl font-bold">{dayRecord.huevos_rotos}</p>
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <p className="text-center text-gray-400 py-8">Sin registro para esa fecha</p>
-              )}
+          <div className="bg-white rounded-2xl border border-gray-100 p-4 space-y-4">
+            <div className="flex gap-2">
+              <input
+                type="date"
+                className="input-base flex-1"
+                value={searchDate}
+                max={new Date().toISOString().split('T')[0]}
+                onChange={e => setSearchDate(e.target.value)}
+              />
+              <button
+                onClick={handleSearchDay}
+                disabled={loading}
+                className="btn-primary px-4 py-2"
+              >
+                <Search className="w-4 h-4" />
+              </button>
             </div>
-          )}
+
+            {daySearched && (
+              <div>
+                {dayRecord ? (
+                  <div className="space-y-3">
+                    <p className="text-sm font-medium text-gray-600">
+                      {new Date(searchDate + 'T12:00:00').toLocaleDateString('es-AR', {
+                        weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
+                      })}
+                      {dayRecord.registered_at && (
+                        <span className="text-gray-400 ml-2 text-xs">
+                          · Registrado {dayRecord.registered_at.slice(0, 5)}
+                        </span>
+                      )}
+                    </p>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      {[
+                        { label: 'Docenas armadas', value: dayRecord.docenas_armadas },
+                        { label: 'Huevos rotos', value: dayRecord.huevos_rotos },
+                        { label: 'Bandejas consumo', value: dayRecord.bandejas_consumo },
+                        { label: 'Bandejas fértiles', value: dayRecord.bandejas_fertiles },
+                      ].map((m, i) => (
+                        <div key={i} className="bg-gray-50 rounded-xl p-3">
+                          <p className="text-xs text-gray-400">{m.label}</p>
+                          <p className="text-2xl font-bold text-gray-900">{m.value}</p>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-3">
+                      {[
+                        { label: '% postura', value: pctPostura },
+                        { label: '% empletado', value: pctEmpletado },
+                        { label: '% rotos', value: pctRotos },
+                      ].map((m, i) => (
+                        <div key={i} className="text-center bg-gray-50 rounded-xl p-3">
+                          <p className="text-xl font-bold text-gray-900">
+                            {m.value !== null ? `${m.value}%` : '—'}
+                          </p>
+                          <p className="text-xs text-gray-400">{m.label}</p>
+                        </div>
+                      ))}
+                    </div>
+
+                    {dayRecord.notas && (
+                      <div className="bg-yellow-50 rounded-xl px-3 py-2">
+                        <p className="text-xs text-yellow-600 font-medium mb-1">Nota de hoy</p>
+                        <p className="text-sm text-yellow-800">{dayRecord.notas}</p>
+                      </div>
+                    )}
+
+                    {dayFertile && (
+                      <div className="border-t border-gray-50 pt-3">
+                        <p className="text-xs text-gray-400 mb-2 font-medium">Fértiles</p>
+                        <div className="grid grid-cols-3 gap-3">
+                          {[
+                            { label: 'Bandejas', value: dayFertile.bandejas_procesadas },
+                            { label: 'Docenas', value: dayFertile.docenas_seleccionadas },
+                            { label: 'Descarte', value: dayFertile.descarte },
+                          ].map((m, i) => (
+                            <div key={i} className="bg-gray-50 rounded-xl p-3 text-center">
+                              <p className="text-lg font-bold text-gray-900">{m.value}</p>
+                              <p className="text-xs text-gray-400">{m.label}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="text-center py-4 text-gray-400 text-sm">
+                    Sin registro para ese día
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
 
-        {/* Rango y Mensual - aquí puedes seguir agregando tus secciones */}
-        {/* ... */}
+        {/* GRÁFICO POR INTERVALO */}
+        <div>
+          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">
+            Producción por intervalo
+          </h3>
+          <div className="bg-white rounded-2xl border border-gray-100 p-4 space-y-4">
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-xs text-gray-400 mb-1 block">Desde</label>
+                <input 
+                  type="date" 
+                  className="input-base text-sm"
+                  value={dateFrom}
+                  max={dateTo}
+                  onChange={e => setDateFrom(e.target.value)} 
+                />
+              </div>
+              <div>
+                <label className="text-xs text-gray-400 mb-1 block">Hasta</label>
+                <input 
+                  type="date" 
+                  className="input-base text-sm"
+                  value={dateTo}
+                  min={dateFrom}
+                  max={new Date().toISOString().split('T')[0]}
+                  onChange={e => setDateTo(e.target.value)} 
+                />
+              </div>
+            </div>
+            <button 
+              onClick={handleSearchRange} 
+              disabled={loading}
+              className="btn-primary w-full py-3 text-sm flex items-center justify-center gap-2"
+            >
+              <Calendar className="w-4 h-4" />
+              Ver producción
+            </button>
+
+            {rangeSearched && rangeRecords.length > 0 && (
+              <div className="space-y-4">
+                <BarChart records={rangeRecords} max={maxRango} />
+
+                <div className="grid grid-cols-2 gap-2 pt-2 border-t border-gray-50">
+                  {[
+                    { label: 'Total docenas', value: totalDocenasRango },
+                    { label: 'Total huevos', value: totalHuevosRango },
+                    { label: 'Total rotos', value: totalRotosRango },
+                    { label: '% rotos', value: pctRotosRango !== null ? `${pctRotosRango}%` : '—' },
+                  ].map((m, i) => (
+                    <div key={i} className="bg-gray-50 rounded-xl p-3">
+                      <p className="text-xs text-gray-400">{m.label}</p>
+                      <p className="text-xl font-bold text-gray-900">{m.value}</p>
+                    </div>
+                  ))}
+                </div>
+
+                <p className="text-xs text-gray-400 text-center">
+                  {rangeRecords.length} días con registro en el período
+                </p>
+              </div>
+            )}
+
+            {rangeSearched && rangeRecords.length === 0 && (
+              <p className="text-center text-gray-400 text-sm">Sin registros en ese período</p>
+            )}
+          </div>
+        </div>
+
+        {/* RESUMEN MENSUAL */}
+        <div>
+          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">
+            Resumen mensual
+          </h3>
+          <div className="bg-white rounded-2xl border border-gray-100 p-4 space-y-4">
+            <select
+              className="input-base"
+              value={selectedMonth}
+              onChange={e => handleMonthChange(e.target.value)}
+            >
+              {monthOptions.map(m => (
+                <option key={m.val} value={m.val}>{m.label}</option>
+              ))}
+            </select>
+
+            {monthRecords.length > 0 ? (
+              <div className="space-y-4">
+                <BarChart records={monthRecords} max={maxMes} />
+
+                <div className="grid grid-cols-2 gap-2 pt-2 border-t border-gray-50">
+                  {[
+                    { label: 'Total docenas', value: totalDocenasMes },
+                    { label: 'Total huevos', value: totalHuevosMes },
+                    { label: 'Promedio docenas/día', value: promedioDocenasDia },
+                    { label: 'Días con registro', value: diasConRegistro },
+                  ].map((m, i) => (
+                    <div key={i} className="bg-gray-50 rounded-xl p-3">
+                      <p className="text-xs text-gray-400">{m.label}</p>
+                      <p className="text-xl font-bold text-gray-900">{m.value}</p>
+                    </div>
+                  ))}
+                </div>
+
+                {totalRotosMes > 0 && (
+                  <div className="bg-red-50 rounded-xl px-3 py-2 flex justify-between items-center">
+                    <span className="text-sm text-red-600">Rotos en el mes</span>
+                    <span className="font-bold text-red-700">{totalRotosMes} huevos</span>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <p className="text-center text-gray-400 text-sm py-4">
+                Sin registros este mes
+              </p>
+            )}
+          </div>
+        </div>
 
       </div>
     </div>
