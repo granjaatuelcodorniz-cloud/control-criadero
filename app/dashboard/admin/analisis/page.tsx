@@ -5,7 +5,7 @@ import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import { useRouter } from 'next/navigation';
 import Header from '@/components/Header';
-import { Search, Calendar, TrendingUp } from 'lucide-react';
+import { Search, Calendar } from 'lucide-react';
 
 type DailyRecord = {
   date: string;
@@ -35,7 +35,7 @@ export default function Analisis() {
   const { user, profile, loading: authLoading } = useAuth();
   const router = useRouter();
 
-  // Estados de búsqueda
+  // Búsqueda por día
   const [searchDate, setSearchDate] = useState(new Date().toISOString().split('T')[0]);
   const [dayRecord, setDayRecord] = useState<DailyRecord | null>(null);
   const [dayFertile, setDayFertile] = useState<FertileRecord | null>(null);
@@ -62,11 +62,17 @@ export default function Analisis() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!user || !profile) { router.push('/'); return; }
-    if (profile.role !== 'owner') { router.push('/dashboard'); return; }
+    if (!user || !profile) {
+      router.push('/');
+      return;
+    }
+    if (profile.role !== 'owner') {
+      router.push('/dashboard');
+      return;
+    }
 
     loadInitialData();
-  }, [authLoading, user, profile]);
+  }, [authLoading, user, profile, router]);
 
   const loadInitialData = async () => {
     // Total aves
@@ -105,7 +111,6 @@ export default function Analisis() {
       .eq('date', searchDate)
       .order('created_at', { ascending: false })
       .limit(1);
-
     setDayRecord(rec && rec.length > 0 ? rec[0] : null);
 
     const { data: fert } = await supabase
@@ -113,7 +118,6 @@ export default function Analisis() {
       .eq('date', searchDate)
       .order('created_at', { ascending: false })
       .limit(1);
-
     setDayFertile(fert && fert.length > 0 ? fert[0] : null);
 
     setLoading(false);
@@ -139,7 +143,7 @@ export default function Analisis() {
     await loadMonth(month);
   };
 
-  // Cálculos para día buscado
+  // Cálculos del día buscado
   const totalConsumo = dayRecord ? (dayRecord.docenas_armadas * 12) + dayRecord.huevos_rotos : 0;
   const pctPostura = totalAves > 0 && totalConsumo > 0 
     ? Math.round((totalConsumo / totalAves) * 100) : null;
@@ -148,7 +152,7 @@ export default function Analisis() {
   const pctEmpletado = totalConsumo > 0 && dayRecord 
     ? Math.round(((dayRecord.docenas_armadas * 12) / totalConsumo) * 100) : null;
 
-  // Cálculos para rango
+  // Cálculos del rango
   const totalHuevosRango = rangeRecords.reduce((s, r) => s + (r.docenas_armadas * 12) + r.huevos_rotos, 0);
   const totalRotosRango = rangeRecords.reduce((s, r) => s + r.huevos_rotos, 0);
   const pctRotosRango = totalHuevosRango > 0 ? Math.round((totalRotosRango / totalHuevosRango) * 100) : null;
@@ -189,7 +193,6 @@ export default function Analisis() {
     </div>
   );
 
-  // Opciones de meses (últimos 12)
   const monthOptions = Array.from({ length: 12 }, (_, i) => {
     const d = new Date();
     d.setMonth(d.getMonth() - i);
@@ -200,7 +203,12 @@ export default function Analisis() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <Header userName={profile.full_name} role={profile.role} backHref="/dashboard/admin" backLabel="Dashboard" />
+      <Header 
+        userName={profile?.full_name || 'Usuario'} 
+        role={profile?.role as 'owner' | 'collaborator' || 'owner'} 
+        backHref="/dashboard/admin" 
+        backLabel="Dashboard" 
+      />
 
       <div className="max-w-2xl mx-auto px-4 py-6 space-y-8">
 
@@ -232,18 +240,39 @@ export default function Analisis() {
             <div className="mt-6">
               {dayRecord ? (
                 <div className="space-y-4">
-                  {/* ... mantengo tus cálculos y tarjetas ... */}
-                  {/* Puedes pegar aquí la parte de visualización del día que ya tenías */}
+                  <p className="text-sm font-medium text-gray-600">
+                    {new Date(searchDate).toLocaleDateString('es-AR', { 
+                      weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' 
+                    })}
+                    {dayRecord.registered_at && (
+                      <span className="text-gray-400 ml-2 text-xs">
+                        · {dayRecord.registered_at.slice(0, 5)}
+                      </span>
+                    )}
+                  </p>
+
+                  {/* Aquí puedes pegar el resto de tarjetas que ya tenías para el día */}
+                  <div className="grid grid-cols-2 gap-3">
+                    {/* Ejemplo de tarjetas - agrega las tuyas */}
+                    <div className="bg-gray-50 rounded-xl p-4">
+                      <p className="text-xs text-gray-400">Docenas armadas</p>
+                      <p className="text-2xl font-bold">{dayRecord.docenas_armadas}</p>
+                    </div>
+                    <div className="bg-gray-50 rounded-xl p-4">
+                      <p className="text-xs text-gray-400">Huevos rotos</p>
+                      <p className="text-2xl font-bold">{dayRecord.huevos_rotos}</p>
+                    </div>
+                  </div>
                 </div>
               ) : (
-                <p className="text-center text-gray-500 py-8">No hay registros para esa fecha</p>
+                <p className="text-center text-gray-400 py-8">Sin registro para esa fecha</p>
               )}
             </div>
           )}
         </div>
 
-        {/* Rango y Mensual */}
-        {/* ... puedes mantener o mejorar estas secciones ... */}
+        {/* Rango y Mensual - aquí puedes seguir agregando tus secciones */}
+        {/* ... */}
 
       </div>
     </div>
