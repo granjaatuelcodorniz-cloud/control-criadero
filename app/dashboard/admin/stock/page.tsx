@@ -33,17 +33,27 @@ export default function Stock() {
 
   const [items, setItems] = useState<StockItem[]>([]);
   const [movements, setMovements] = useState<Movement[]>([]);
+
+  // Formulario movimiento
   const [selectedItem, setSelectedItem] = useState('');
   const [movType, setMovType] = useState<'entrada' | 'salida'>('entrada');
   const [movQty, setMovQty] = useState(0);
   const [movNotes, setMovNotes] = useState('');
   const [showMovForm, setShowMovForm] = useState(false);
+
+  // Formulario nuevo insumo
   const [showNewItem, setShowNewItem] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [newUnit, setNewUnit] = useState('');
+  const [newQty, setNewQty] = useState(0);
+  const [newThreshold, setNewThreshold] = useState(0);
+
+  // Edición
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editThreshold, setEditThreshold] = useState(0);
   const [editUnit, setEditUnit] = useState('');
 
-  // Formulario de entrega de alimento (múltiples)
+  // Entrega de alimento
   const [showFeedForm, setShowFeedForm] = useState<number | null>(null);
   const [feedKg, setFeedKg] = useState('');
   const [feedBolsas, setFeedBolsas] = useState('');
@@ -82,7 +92,7 @@ export default function Stock() {
     loadData();
   }, [authLoading, user, profile]);
 
-  // === ABRIR BOLSA (para cualquier alimento) ===
+  // Abrir bolsa
   const handleOpenBolsa = async (feedItem: StockItem) => {
     if (!feedItem.kg_por_bolsa || !feedItem.bolsas_restantes || !user) return;
     setSaving(true);
@@ -110,7 +120,7 @@ export default function Stock() {
     await loadData();
   };
 
-  // === NUEVA ENTREGA DE ALIMENTO (múltiples) ===
+  // Nueva entrega de alimento
   const handleFeedDelivery = async (feedItemId: number) => {
     if (!feedKg || !feedBolsas || !user) return;
     setSaving(true);
@@ -146,11 +156,77 @@ export default function Stock() {
     await loadData();
   };
 
-  // Resto de funciones (mantengo las tuyas)
-  const handleMovement = async () => { /* tu código actual */ };
-  const handleNewItem = async () => { /* tu código actual */ };
-  const handleSaveEdit = async (item: StockItem) => { /* tu código actual */ };
-  const handleDeleteItem = async (id: number) => { /* tu código actual */ };
+  const handleMovement = async () => {
+    if (!selectedItem || movQty <= 0 || !user) return;
+    setSaving(true);
+
+    const item = items.find(i => String(i.id) === selectedItem);
+    if (!item) return;
+
+    const newQtyCalc = movType === 'entrada'
+      ? item.current_quantity + movQty
+      : Math.max(0, item.current_quantity - movQty);
+
+    await supabase.from('stock_movements').insert({
+      stock_item_id: Number(selectedItem),
+      quantity: movQty,
+      movement_type: movType,
+      notes: movNotes.trim() || null,
+      user_id: user.id,
+      date: new Date().toISOString().split('T')[0],
+    });
+
+    await supabase.from('stock_items')
+      .update({ current_quantity: newQtyCalc })
+      .eq('id', Number(selectedItem));
+
+    setMovQty(0);
+    setMovNotes('');
+    setShowMovForm(false);
+    setSaving(false);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 3000);
+    await loadData();
+  };
+
+  const handleNewItem = async () => {
+    if (!newName.trim() || !newUnit.trim()) return;
+    setSaving(true);
+
+    await supabase.from('stock_items').insert({
+      name: newName.trim(),
+      unit: newUnit.trim(),
+      current_quantity: newQty,
+      alert_threshold: newThreshold,
+      is_feed: false,
+    });
+
+    setNewName('');
+    setNewUnit('');
+    setNewQty(0);
+    setNewThreshold(0);
+    setShowNewItem(false);
+    setSaving(false);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 3000);
+    await loadData();
+  };
+
+  const handleSaveEdit = async (item: StockItem) => {
+    await supabase.from('stock_items').update({
+      alert_threshold: editThreshold,
+      unit: editUnit,
+    }).eq('id', item.id);
+    setEditingId(null);
+    await loadData();
+  };
+
+  const handleDeleteItem = async (id: number) => {
+    if (!confirm('¿Eliminar este insumo? Se perderá el historial de movimientos.')) return;
+    await supabase.from('stock_movements').delete().eq('stock_item_id', id);
+    await supabase.from('stock_items').delete().eq('id', id);
+    await loadData();
+  };
 
   if (authLoading || loading) {
     return <div className="min-h-screen bg-gray-50 flex items-center justify-center">Cargando stock...</div>;
@@ -158,7 +234,6 @@ export default function Stock() {
 
   if (!profile) return null;
 
-  // Separar alimentos y otros insumos
   const feedItems = items.filter(i => i.is_feed === true);
   const otherItems = items.filter(i => i.is_feed !== true);
 
@@ -173,7 +248,7 @@ export default function Stock() {
           {saved && <span className="text-green-600 text-sm font-medium">✓ Guardado</span>}
         </div>
 
-        {/* ALIMENTOS - Soporte múltiple */}
+        {/* ==================== ALIMENTOS ==================== */}
         {feedItems.length > 0 && (
           <div>
             <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-4">Alimentos</h3>
@@ -217,44 +292,26 @@ export default function Stock() {
                     </button>
                   </div>
 
-                  {/* Formulario de entrega */}
                   {showFeedForm === feedItem.id && (
                     <div className="mt-5 pt-5 border-t space-y-4">
                       <div>
                         <label className="text-sm text-gray-600 mb-1 block">Fecha</label>
-                        <input 
-                          type="date" 
-                          className="input-base" 
-                          value={feedDate} 
-                          onChange={e => setFeedDate(e.target.value)} 
-                        />
+                        <input type="date" className="input-base" value={feedDate} onChange={e => setFeedDate(e.target.value)} />
                       </div>
                       <div className="grid grid-cols-2 gap-3">
                         <div>
                           <label className="text-sm text-gray-600 mb-1 block">Total kg</label>
-                          <input 
-                            type="number" 
-                            className="input-base" 
-                            placeholder="1200" 
-                            value={feedKg} 
-                            onChange={e => setFeedKg(e.target.value)} 
-                          />
+                          <input type="number" className="input-base" placeholder="1200" value={feedKg} onChange={e => setFeedKg(e.target.value)} />
                         </div>
                         <div>
                           <label className="text-sm text-gray-600 mb-1 block">N° de bolsas</label>
-                          <input 
-                            type="number" 
-                            className="input-base" 
-                            placeholder="48" 
-                            value={feedBolsas} 
-                            onChange={e => setFeedBolsas(e.target.value)} 
-                          />
+                          <input type="number" className="input-base" placeholder="48" value={feedBolsas} onChange={e => setFeedBolsas(e.target.value)} />
                         </div>
                       </div>
                       <button 
                         onClick={() => handleFeedDelivery(feedItem.id)} 
                         disabled={saving}
-                        className="btn-primary w-full py-3"
+                        className="btn-primary w-full py-3 text-sm"
                       >
                         {saving ? 'Guardando...' : 'Confirmar entrega'}
                       </button>
@@ -266,9 +323,101 @@ export default function Stock() {
           </div>
         )}
 
-        {/* Resto de tu código (otros insumos, movimientos, historial, agregar nuevo insumo) se mantiene igual */}
+        {/* ==================== OTROS INSUMOS ==================== */}
+        <div>
+          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-4">Otros Insumos</h3>
+          <div className="space-y-3">
+            {otherItems.map(item => (
+              <div key={item.id} className={`rounded-2xl border p-4 ${item.current_quantity <= item.alert_threshold ? 'bg-yellow-50 border-yellow-200' : 'bg-white border-gray-100'}`}>
+                {editingId === item.id ? (
+                  <div className="space-y-3">
+                    <p className="font-semibold">{item.name}</p>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-xs text-gray-500">Unidad</label>
+                        <input className="input-base text-sm" value={editUnit} onChange={e => setEditUnit(e.target.value)} />
+                      </div>
+                      <div>
+                        <label className="text-xs text-gray-500">Mínimo alerta</label>
+                        <input className="input-base text-sm" type="number" value={editThreshold} onChange={e => setEditThreshold(Number(e.target.value))} />
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <button onClick={() => handleSaveEdit(item)} className="btn-primary flex-1 py-2 text-sm flex items-center justify-center gap-1">
+                        <Check className="w-4 h-4" /> Guardar
+                      </button>
+                      <button onClick={() => setEditingId(null)} className="btn-secondary px-3 py-2">
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex justify-between items-center">
+                      <div>
+                        <p className="font-medium">{item.name}</p>
+                        <p className="text-sm text-gray-500">{item.current_quantity} {item.unit}</p>
+                      </div>
+                      <div className="flex gap-2">
+                        <button 
+                          onClick={() => {
+                            setEditingId(item.id);
+                            setEditThreshold(item.alert_threshold);
+                            setEditUnit(item.unit);
+                          }} 
+                          className="text-gray-400 hover:text-gray-600"
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </button>
+                        <button onClick={() => handleDeleteItem(item.id)} className="text-gray-400 hover:text-red-500">
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
 
-        {/* ... (pegá aquí el resto de tu código original para otros insumos, movimientos, etc.) ... */}
+        {/* Agregar nuevo insumo */}
+        {!showNewItem ? (
+          <button 
+            onClick={() => setShowNewItem(true)}
+            className="w-full py-3 rounded-2xl border-2 border-dashed border-gray-200 text-gray-400 hover:border-yellow-300 hover:text-yellow-500 transition-all flex items-center justify-center gap-2 text-sm"
+          >
+            <Plus className="w-4 h-4" /> Agregar nuevo insumo
+          </button>
+        ) : (
+          <div className="bg-white rounded-2xl border border-gray-100 p-4 space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="font-semibold text-gray-800">Nuevo insumo</h3>
+              <button onClick={() => setShowNewItem(false)}>
+                <X className="w-4 h-4 text-gray-400" />
+              </button>
+            </div>
+            <div>
+              <label className="text-sm text-gray-600 mb-1 block">Nombre</label>
+              <input className="input-base" placeholder="Ej: Desinfectante" value={newName} onChange={e => setNewName(e.target.value)} />
+            </div>
+            <div>
+              <label className="text-sm text-gray-600 mb-1 block">Unidad</label>
+              <input className="input-base" placeholder="Ej: litros, kg, unidades" value={newUnit} onChange={e => setNewUnit(e.target.value)} />
+            </div>
+            <div>
+              <label className="text-sm text-gray-600 mb-1 block">Stock inicial</label>
+              <input className="input-base" type="number" min="0" value={newQty} onChange={e => setNewQty(Number(e.target.value))} />
+            </div>
+            <div>
+              <label className="text-sm text-gray-600 mb-1 block">Mínimo para alerta</label>
+              <input className="input-base" type="number" min="0" value={newThreshold} onChange={e => setNewThreshold(Number(e.target.value))} />
+            </div>
+            <button onClick={handleNewItem} disabled={saving} className="btn-primary w-full py-3 text-sm">
+              {saving ? 'Guardando...' : 'Guardar insumo'}
+            </button>
+          </div>
+        )}
 
       </div>
     </div>
