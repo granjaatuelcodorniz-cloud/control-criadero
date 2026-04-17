@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import { createContext, useContext, useEffect, useState } from 'react';
 import { createClient } from '@/lib/supabase';
 import { User } from '@supabase/supabase-js';
 
@@ -29,31 +29,47 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
   const supabase = createClient();
 
-  const loadProfile = useCallback(async (userId: string) => {
+  const loadProfile = async (userId: string) => {
     const { data } = await supabase
       .from('profiles')
       .select('full_name, role')
       .eq('id', userId)
       .single();
     if (data) setProfile(data);
-  }, []);
+    return data;
+  };
+
+  const refreshSession = async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (session?.user) {
+      setUser(session.user);
+      if (!profile) await loadProfile(session.user.id);
+    } else {
+      setUser(null);
+      setProfile(null);
+    }
+  };
 
   useEffect(() => {
     let mounted = true;
 
     const init = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!mounted) return;
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!mounted) return;
 
-      if (user) {
-        setUser(user);
-        await loadProfile(user.id);
+        if (session?.user) {
+          setUser(session.user);
+          await loadProfile(session.user.id);
+        }
+      } finally {
+        if (mounted) setLoading(false);
       }
-      setLoading(false);
     };
 
     init();
 
+    // Escuchar cambios de sesión
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         if (!mounted) return;
@@ -64,14 +80,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
         if (session?.user) {
           setUser(session.user);
-          await loadProfile(session.user.id);
+          if (!profile) await loadProfile(session.user.id);
         }
       }
     );
 
+    // Refrescar sesión cuando la app vuelve al primer plano
+    const handleVisibility = async () => {
+      if (document.visibilityState === 'visible' && mounted) {
+        await refreshSession();
+      }
+    };
+
+    // Refrescar sesión cuando hay conexión de red
+    const handleOnline = async () => {
+      if (mounted) await refreshSession();
+    };
+
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('online', handleOnline);
+
     return () => {
       mounted = false;
       subscription.unsubscribe();
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('online', handleOnline);
     };
   }, []);
 
