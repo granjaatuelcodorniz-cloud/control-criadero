@@ -4,6 +4,8 @@ import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 import Header from '@/components/Header';
 import { ChevronDown } from 'lucide-react';
+import { useAuth } from '@/contexts/AuthContext';
+import { useRouter } from 'next/navigation';
 
 type Profile = { full_name: string; role: 'owner' | 'collaborator' };
 
@@ -140,23 +142,17 @@ export default function RegistroHuevos() {
   const [success, setSuccess] = useState('');
 
   useEffect(() => {
-    const load = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) { window.location.href = '/'; return; }
-      const { data } = await supabase.from('profiles')
-        .select('full_name, role').eq('id', user.id).single();
-      if (data) setProfile(data);
-      setLoaded(true);
-    };
-    load();
-  }, []);
+    if (authLoading) return;
+    if (!user) {
+      router.push('/');
+    }
+  }, [user, authLoading, router]);
 
   const isOwner = profile?.role === 'owner';
 
   const handleSubmitConsumo = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
     const now = new Date();
@@ -189,7 +185,6 @@ export default function RegistroHuevos() {
   const handleSubmitFertiles = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
     const now = new Date();
@@ -217,7 +212,7 @@ export default function RegistroHuevos() {
     setLoading(false);
   };
 
-  if (!loaded) return (
+  if (authLoading) return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center">
       <p className="text-gray-400">Cargando...</p>
     </div>
