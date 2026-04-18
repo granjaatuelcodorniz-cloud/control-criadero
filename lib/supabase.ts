@@ -7,9 +7,10 @@ export function createClient() {
     {
       auth: {
         persistSession: true,
-        storageKey: 'cc-auth-token',
+        storageKey: 'cc-auth',
+        storage: typeof window !== 'undefined' ? window.localStorage : undefined,
         autoRefreshToken: true,
-        detectSessionInUrl: true,
+        detectSessionInUrl: false,
       }
     }
   )
