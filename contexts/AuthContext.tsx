@@ -42,14 +42,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let mounted = true;
 
-    // Timeout de seguridad — máximo 8 segundos de loading
-    const timeout = setTimeout(() => {
-      if (mounted) {
-        setLoading(false);
-        window.location.href = '/';
-      }
-    }, 8000);
-
     const init = async () => {
       try {
         const { data: { session } } = await supabase.auth.getSession();
@@ -59,13 +51,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setUser(session.user);
           await fetchProfile(session.user.id);
         }
-      } catch (e) {
-        console.error('Auth init error:', e);
       } finally {
-        if (mounted) {
-          clearTimeout(timeout);
-          setLoading(false);
-        }
+        if (mounted) setLoading(false);
       }
     };
 
@@ -84,7 +71,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (event === 'SIGNED_IN' && session?.user) {
           setUser(session.user);
           await fetchProfile(session.user.id);
-          setLoading(false);
+          if (mounted) setLoading(false);
           return;
         }
 
@@ -105,7 +92,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         } else {
           setUser(null);
           setProfile(null);
-          window.location.href = '/';
         }
       }
     };
@@ -114,7 +100,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     return () => {
       mounted = false;
-      clearTimeout(timeout);
       subscription.unsubscribe();
       document.removeEventListener('visibilitychange', handleVisibility);
     };
