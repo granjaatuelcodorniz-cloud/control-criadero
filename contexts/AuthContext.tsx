@@ -23,39 +23,32 @@ const AuthContext = createContext<AuthContextType>({
   signOut: async () => {},
 });
 
-const PROFILE_CACHE_KEY = 'cc-profile';
-
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
-  const [profile, setProfile] = useState<Profile | null>(() => {
-    if (typeof window === 'undefined') return null;
-    try {
-      const cached = localStorage.getItem(PROFILE_CACHE_KEY);
-      return cached ? JSON.parse(cached) : null;
-    } catch { return null; }
-  });
+  const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
-
   const supabase = createClient();
 
-  const fetchProfile = async (userId: string): Promise<Profile | null> => {
-    try {
-      const { data } = await supabase
-        .from('profiles')
-        .select('full_name, role')
-        .eq('id', userId)
-        .single();
-      if (data) {
-        localStorage.setItem(PROFILE_CACHE_KEY, JSON.stringify(data));
-        setProfile(data);
-        return data;
-      }
-    } catch {}
-    return null;
+  const fetchProfile = async (userId: string) => {
+    const { data } = await supabase
+      .from('profiles')
+      .select('full_name, role')
+      .eq('id', userId)
+      .single();
+    if (data) setProfile(data);
+    return data;
   };
 
   useEffect(() => {
     let mounted = true;
+
+    // Timeout de seguridad — máximo 8 segundos de loading
+    const timeout = setTimeout(() => {
+      if (mounted) {
+        setLoading(false);
+        window.location.href = '/';
+      }
+    }, 8000);
 
     const init = async () => {
       try {
@@ -64,17 +57,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         if (session?.user) {
           setUser(session.user);
-          const cached = localStorage.getItem(PROFILE_CACHE_KEY);
-          if (!cached) {
-            await fetchProfile(session.user.id);
-          }
-        } else {
-          setUser(null);
-          setProfile(null);
-          localStorage.removeItem(PROFILE_CACHE_KEY);
+          await fetchProfile(session.user.id);
         }
+      } catch (e) {
+        console.error('Auth init error:', e);
       } finally {
-        if (mounted) setLoading(false);
+        if (mounted) {
+          clearTimeout(timeout);
+          setLoading(false);
+        }
       }
     };
 
@@ -87,7 +78,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (event === 'SIGNED_OUT') {
           setUser(null);
           setProfile(null);
-          localStorage.removeItem(PROFILE_CACHE_KEY);
           return;
         }
 
@@ -108,12 +98,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const handleVisibility = async () => {
       if (document.visibilityState === 'visible' && mounted) {
         const { data: { session } } = await supabase.auth.getSession();
+        if (!mounted) return;
         if (session?.user) {
           setUser(session.user);
+          if (!profile) await fetchProfile(session.user.id);
         } else {
           setUser(null);
           setProfile(null);
-          localStorage.removeItem(PROFILE_CACHE_KEY);
           window.location.href = '/';
         }
       }
@@ -123,13 +114,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     return () => {
       mounted = false;
+      clearTimeout(timeout);
       subscription.unsubscribe();
       document.removeEventListener('visibilitychange', handleVisibility);
     };
   }, []);
 
   const signOut = async () => {
-    localStorage.removeItem(PROFILE_CACHE_KEY);
     setUser(null);
     setProfile(null);
     await supabase.auth.signOut();
