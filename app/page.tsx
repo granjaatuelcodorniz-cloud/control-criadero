@@ -27,21 +27,10 @@ export default function Login() {
       return;
     }
 
-    if (data.user) {
-      // Obtener perfil para redirigir al lugar correcto
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('role')
-        .eq('id', data.user.id)
-        .single();
-
-      if (profile?.role === 'owner') {
-        window.location.href = '/dashboard/admin';
-      } else {
-        window.location.href = '/dashboard';
-      }
+   if (data.user) {
+      // Forzamos un refresh total para que el Middleware tome las nuevas cookies
+      window.location.replace('/dashboard'); 
     }
-  };
 
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
