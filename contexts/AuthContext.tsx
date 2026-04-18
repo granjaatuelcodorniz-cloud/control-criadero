@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { createClient } from '@/lib/supabase';
 import { User } from '@supabase/supabase-js';
 
@@ -23,59 +23,33 @@ const AuthContext = createContext<AuthContextType>({
   signOut: async () => {},
 });
 
-const PROFILE_CACHE_KEY = 'cc-profile';
-
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
-  const [profile, setProfile] = useState<Profile | null>(() => {
-    if (typeof window === 'undefined') return null;
-    try {
-      const cached = localStorage.getItem(PROFILE_CACHE_KEY);
-      return cached ? JSON.parse(cached) : null;
-    } catch { return null; }
-  });
+  const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
-
   const supabase = createClient();
 
-  const fetchProfile = async (userId: string): Promise<Profile | null> => {
-    try {
-      const { data } = await supabase
-        .from('profiles')
-        .select('full_name, role')
-        .eq('id', userId)
-        .single();
-      if (data) {
-        localStorage.setItem(PROFILE_CACHE_KEY, JSON.stringify(data));
-        setProfile(data);
-        return data;
-      }
-    } catch {}
-    return null;
-  };
+  const loadProfile = useCallback(async (userId: string) => {
+    const { data } = await supabase
+      .from('profiles')
+      .select('full_name, role')
+      .eq('id', userId)
+      .single();
+    if (data) setProfile(data);
+  }, []);
 
   useEffect(() => {
     let mounted = true;
 
     const init = async () => {
-      try {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!mounted) return;
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!mounted) return;
 
-        if (session?.user) {
-          setUser(session.user);
-          const cached = localStorage.getItem(PROFILE_CACHE_KEY);
-          if (!cached) {
-            await fetchProfile(session.user.id);
-          }
-        } else {
-          setUser(null);
-          setProfile(null);
-          localStorage.removeItem(PROFILE_CACHE_KEY);
-        }
-      } finally {
-        if (mounted) setLoading(false);
+      if (user) {
+        setUser(user);
+        await loadProfile(user.id);
       }
+      setLoading(false);
     };
 
     init();
@@ -83,56 +57,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         if (!mounted) return;
-
         if (event === 'SIGNED_OUT') {
           setUser(null);
           setProfile(null);
-          localStorage.removeItem(PROFILE_CACHE_KEY);
           return;
         }
-
-        if (event === 'SIGNED_IN' && session?.user) {
+        if (session?.user) {
           setUser(session.user);
-          await fetchProfile(session.user.id);
-          setLoading(false);
-          return;
-        }
-
-        if (event === 'TOKEN_REFRESHED' && session?.user) {
-          setUser(session.user);
-          return;
+          await loadProfile(session.user.id);
         }
       }
     );
 
-    const handleVisibility = async () => {
-      if (document.visibilityState === 'visible' && mounted) {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (session?.user) {
-          setUser(session.user);
-        } else {
-          setUser(null);
-          setProfile(null);
-          localStorage.removeItem(PROFILE_CACHE_KEY);
-          window.location.href = '/';
-        }
-      }
-    };
-
-    document.addEventListener('visibilitychange', handleVisibility);
-
     return () => {
       mounted = false;
       subscription.unsubscribe();
-      document.removeEventListener('visibilitychange', handleVisibility);
     };
   }, []);
 
   const signOut = async () => {
-    localStorage.removeItem(PROFILE_CACHE_KEY);
+    await supabase.auth.signOut();
     setUser(null);
     setProfile(null);
-    await supabase.auth.signOut();
     window.location.href = '/';
   };
 
