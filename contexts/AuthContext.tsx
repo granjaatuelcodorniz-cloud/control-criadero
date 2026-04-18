@@ -23,31 +23,35 @@ const AuthContext = createContext<AuthContextType>({
   signOut: async () => {},
 });
 
+const PROFILE_CACHE_KEY = 'cc-profile';
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
-  const [profile, setProfile] = useState<Profile | null>(null);
+  const [profile, setProfile] = useState<Profile | null>(() => {
+    if (typeof window === 'undefined') return null;
+    try {
+      const cached = localStorage.getItem(PROFILE_CACHE_KEY);
+      return cached ? JSON.parse(cached) : null;
+    } catch { return null; }
+  });
   const [loading, setLoading] = useState(true);
+
   const supabase = createClient();
 
-  const loadProfile = async (userId: string) => {
-    const { data } = await supabase
-      .from('profiles')
-      .select('full_name, role')
-      .eq('id', userId)
-      .single();
-    if (data) setProfile(data);
-    return data;
-  };
-
-  const refreshSession = async () => {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (session?.user) {
-      setUser(session.user);
-      if (!profile) await loadProfile(session.user.id);
-    } else {
-      setUser(null);
-      setProfile(null);
-    }
+  const fetchProfile = async (userId: string): Promise<Profile | null> => {
+    try {
+      const { data } = await supabase
+        .from('profiles')
+        .select('full_name, role')
+        .eq('id', userId)
+        .single();
+      if (data) {
+        localStorage.setItem(PROFILE_CACHE_KEY, JSON.stringify(data));
+        setProfile(data);
+        return data;
+      }
+    } catch {}
+    return null;
   };
 
   useEffect(() => {
@@ -60,7 +64,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         if (session?.user) {
           setUser(session.user);
-          await loadProfile(session.user.id);
+          const cached = localStorage.getItem(PROFILE_CACHE_KEY);
+          if (!cached) {
+            await fetchProfile(session.user.id);
+          }
+        } else {
+          setUser(null);
+          setProfile(null);
+          localStorage.removeItem(PROFILE_CACHE_KEY);
         }
       } finally {
         if (mounted) setLoading(false);
@@ -69,49 +80,59 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     init();
 
-    // Escuchar cambios de sesión
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         if (!mounted) return;
+
         if (event === 'SIGNED_OUT') {
           setUser(null);
           setProfile(null);
+          localStorage.removeItem(PROFILE_CACHE_KEY);
           return;
         }
-        if (session?.user) {
+
+        if (event === 'SIGNED_IN' && session?.user) {
           setUser(session.user);
-          if (!profile) await loadProfile(session.user.id);
+          await fetchProfile(session.user.id);
+          setLoading(false);
+          return;
+        }
+
+        if (event === 'TOKEN_REFRESHED' && session?.user) {
+          setUser(session.user);
+          return;
         }
       }
     );
 
-    // Refrescar sesión cuando la app vuelve al primer plano
     const handleVisibility = async () => {
       if (document.visibilityState === 'visible' && mounted) {
-        await refreshSession();
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.user) {
+          setUser(session.user);
+        } else {
+          setUser(null);
+          setProfile(null);
+          localStorage.removeItem(PROFILE_CACHE_KEY);
+          window.location.href = '/';
+        }
       }
     };
 
-    // Refrescar sesión cuando hay conexión de red
-    const handleOnline = async () => {
-      if (mounted) await refreshSession();
-    };
-
     document.addEventListener('visibilitychange', handleVisibility);
-    window.addEventListener('online', handleOnline);
 
     return () => {
       mounted = false;
       subscription.unsubscribe();
       document.removeEventListener('visibilitychange', handleVisibility);
-      window.removeEventListener('online', handleOnline);
     };
   }, []);
 
   const signOut = async () => {
-    await supabase.auth.signOut();
+    localStorage.removeItem(PROFILE_CACHE_KEY);
     setUser(null);
     setProfile(null);
+    await supabase.auth.signOut();
     window.location.href = '/';
   };
 
