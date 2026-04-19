@@ -171,12 +171,12 @@ export default function AdminDashboard() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <Header userName={profile.full_name} role={profile.role} />
+      <Header userName={profile!.full_name} role={profile!.role} />
 
       <div className="max-w-2xl mx-auto px-4 py-6 space-y-6">
 
         <div>
-          <h2 className="text-2xl font-bold text-gray-900">Hola, {profile.full_name} 👋</h2>
+          <h2 className="text-2xl font-bold text-gray-900">Hola, {profile!.full_name} 👋</h2>
           <p className="text-gray-500 text-sm mt-1">
             {new Date().toLocaleDateString('es-AR', { weekday: 'long', day: 'numeric', month: 'long' })}
           </p>
