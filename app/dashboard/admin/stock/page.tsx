@@ -5,7 +5,7 @@ import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import { useRouter } from 'next/navigation';
 import Header from '@/components/Header';
-import { Plus, X, Pencil, Check, Trash2, Package, AlertTriangle, History, ArrowDownCircle, ArrowUpCircle } from 'lucide-react';
+import { Plus, X, Pencil, Check, Trash2, Package, AlertTriangle, History, ArrowDownCircle, ArrowUpCircle, ClipboardList } from 'lucide-react';
 
 type StockItem = {
   id: number;
