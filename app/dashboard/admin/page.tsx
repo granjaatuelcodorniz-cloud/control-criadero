@@ -1,50 +1,65 @@
 'use client';
 
-export const dynamic = 'force-dynamic';
-
 import { useEffect, useState } from 'react';
-import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
-import { useRouter } from 'next/navigation';
+import { supabase } from '@/lib/supabase';
 import Header from '@/components/Header';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
-  TrendingUp, Package, Heart, ClipboardList, BarChart2,
-  Clock, CheckCircle, AlertTriangle, Egg
+  Egg,
+  CheckSquare,
+  AlertTriangle,
+  ClipboardList,
+  Plus,
+  X
 } from 'lucide-react';
 
-type DailyRecord = {
-  date: string;
-  registered_at: string | null;
-  bandejas_consumo: number;
-  bandejas_fertiles: number;
-  docenas_armadas: number;
-  huevos_rotos: number;
-  notas: string | null;
+type Task = {
+  id: number;
+  description: string;
+  type: 'daily' | 'periodic' | 'custom';
+  frequency_days?: number;
+  is_urgent?: boolean;
 };
 
-type FertileRecord = {
-  date: string;
-  registered_at: string | null;
-  bandejas_procesadas: number;
-  docenas_seleccionadas: number;
-  descarte: number;
+type Lot = {
+  id: number;
+  code: string;
+  current_quantity: number;
 };
 
-type Alert = {
-  type: 'danger' | 'warning' | 'ok';
-  message: string;
+type StockItem = {
+  id: number;
+  name: string;
+  unit: string;
+  current_quantity: number;
+  is_feed?: boolean;
+  bolsas_restantes?: number | null;
+  kg_por_bolsa?: number | null;
 };
 
-export default function AdminDashboard() {
+export default function Dashboard() {
   const { user, profile, loading: authLoading } = useAuth();
   const router = useRouter();
 
+  const [dailyTasks, setDailyTasks] = useState<Task[]>([]);
+  const [periodicTasks, setPeriodicTasks] = useState<Task[]>([]);
+  const [customTasks, setCustomTasks] = useState<Task[]>([]);
+  const [completedIds, setCompletedIds] = useState<number[]>([]);
+
+  const [lots, setLots] = useState<Lot[]>([]);
+  const [selectedLot, setSelectedLot] = useState('');
+
+  const [showExtraTask, setShowExtraTask] = useState(false);
+  const [extraTaskDesc, setExtraTaskDesc] = useState('');
+
   const [loading, setLoading] = useState(true);
-  const [todayRecord, setTodayRecord] = useState<DailyRecord | null>(null);
-  const [todayFertile, setTodayFertile] = useState<FertileRecord | null>(null);
-  const [alerts, setAlerts] = useState<Alert[]>([]);
-  const [totalAves, setTotalAves] = useState(0);
+
+  const [stockItems, setStockItems] = useState<StockItem[]>([]);
+  const [savingStock, setSavingStock] = useState(false);
+  const [stockSaved, setStockSaved] = useState(false);
+  const [confirmStock, setConfirmStock] = useState<number | null>(null);
 
   const today = new Date().toISOString().split('T')[0];
 
@@ -56,8 +71,8 @@ export default function AdminDashboard() {
       return;
     }
 
-    if (profile.role !== 'owner') {
-      router.push('/dashboard');
+    if (profile.role === 'owner') {
+      router.push('/dashboard/admin');
       return;
     }
 
@@ -65,145 +80,169 @@ export default function AdminDashboard() {
   }, [authLoading, user, profile]);
 
   const loadData = async () => {
-    setLoading(true);
+    if (!user) return;
 
-    const { data: todayData } = await supabase
-      .from('daily_records')
-      .select('*')
-      .eq('date', today)
-      .limit(1)
-      .maybeSingle();
+    const { data: tasksData } = await supabase
+      .from('tasks')
+      .select('id, description, type, frequency_days, is_urgent')
+      .eq('is_active', true)
+      .order('type');
 
-    setTodayRecord(todayData);
-
-    const { data: fertileData } = await supabase
-      .from('fertile_records')
-      .select('*')
-      .eq('date', today)
-      .limit(1)
-      .maybeSingle();
-
-    setTodayFertile(fertileData);
-
-    const { data: lots } = await supabase
-      .from('lots')
-      .select('current_quantity');
-
-    if (lots) {
-      setTotalAves(lots.reduce((s, l) => s + l.current_quantity, 0));
+    if (tasksData) {
+      setDailyTasks(tasksData.filter(t => t.type === 'daily'));
+      setPeriodicTasks(tasksData.filter(t => t.type === 'periodic'));
+      setCustomTasks(tasksData.filter(t => t.type === 'custom'));
     }
 
-    const newAlerts: Alert[] = [];
+    const { data: completions } = await supabase
+      .from('task_completions')
+      .select('task_id')
+      .eq('user_id', user.id)
+      .eq('date', today);
 
-    const { data: stock } = await supabase
+    if (completions) {
+      setCompletedIds(completions.map(c => c.task_id));
+    }
+
+    const { data: lotsData } = await supabase
+      .from('lots')
+      .select('*');
+
+    if (lotsData) setLots(lotsData);
+
+    const { data: stockData } = await supabase
       .from('stock_items')
       .select('*');
 
-    if (stock) {
-      stock.forEach(item => {
-        if (item.current_quantity <= item.alert_threshold) {
-          newAlerts.push({
-            type: 'warning',
-            message: `Stock bajo: ${item.name}`
-          });
-        }
-      });
-    }
+    if (stockData) setStockItems(stockData);
 
-    if (newAlerts.length === 0) {
-      newAlerts.push({ type: 'ok', message: 'Todo en orden' });
-    }
-
-    setAlerts(newAlerts);
     setLoading(false);
+  };
+
+  const toggleTask = async (taskId: number) => {
+    if (!user) return;
+
+    const isDone = completedIds.includes(taskId);
+
+    if (isDone) {
+      await supabase
+        .from('task_completions')
+        .delete()
+        .eq('task_id', taskId)
+        .eq('user_id', user.id)
+        .eq('date', today);
+
+      setCompletedIds(prev => prev.filter(id => id !== taskId));
+    } else {
+      await supabase.from('task_completions').insert({
+        task_id: taskId,
+        user_id: user.id,
+        date: today
+      });
+
+      setCompletedIds(prev => [...prev, taskId]);
+    }
+  };
+
+  const handleUseItem = async (item: StockItem) => {
+    if (!user) return;
+
+    setSavingStock(true);
+    setConfirmStock(null);
+
+    await supabase.from('stock_movements').insert({
+      stock_item_id: item.id,
+      quantity: 1,
+      movement_type: 'salida',
+      user_id: user.id,
+      date: today
+    });
+
+    await supabase
+      .from('stock_items')
+      .update({
+        current_quantity: Math.max(0, item.current_quantity - 1)
+      })
+      .eq('id', item.id);
+
+    setSavingStock(false);
+    setStockSaved(true);
+    setTimeout(() => setStockSaved(false), 3000);
+
+    await loadData();
   };
 
   if (authLoading || loading || !profile) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <p>Cargando...</p>
+        <p className="text-gray-400">Cargando...</p>
       </div>
     );
   }
 
-  // cálculos seguros
-  const totalHuevos =
-    (todayRecord?.docenas_armadas ?? 0) * 12 +
-    (todayRecord?.huevos_rotos ?? 0) +
-    (todayFertile?.docenas_seleccionadas ?? 0) * 12;
+  const totalTasks =
+    dailyTasks.length + periodicTasks.length + customTasks.length;
 
-  const postura =
-    totalAves > 0 ? Math.round((totalHuevos / totalAves) * 100) : 0;
+  const doneTasks = completedIds.length;
+
+  const progress =
+    totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 100) : 0;
+
+  const TaskItem = ({ task }: { task: Task }) => {
+    const isDone = completedIds.includes(task.id);
+
+    return (
+      <div
+        onClick={() => toggleTask(task.id)}
+        className={`flex items-center gap-4 p-4 rounded-2xl border cursor-pointer transition ${
+          isDone
+            ? 'bg-gray-50 border-gray-100'
+            : 'bg-white border-gray-200'
+        }`}
+      >
+        <div
+          className={`w-6 h-6 rounded-full border-2 flex items-center justify-center ${
+            isDone ? 'bg-yellow-400 border-yellow-400' : 'border-gray-300'
+          }`}
+        >
+          {isDone && <span className="text-white text-xs">✓</span>}
+        </div>
+
+        <span
+          className={`${
+            isDone ? 'line-through text-gray-400' : 'text-gray-800'
+          }`}
+        >
+          {task.description}
+        </span>
+      </div>
+    );
+  };
 
   return (
     <div className="min-h-screen bg-gray-50">
-
-      {/* 🔒 CLAVE: seguro contra null */}
       <Header
-        userName={profile?.full_name || 'Usuario'}
-        role={profile?.role || ''}
+        userName={profile.full_name}
+        role={profile.role}
       />
 
-      <div className="max-w-2xl mx-auto p-4 space-y-6">
+      <div className="max-w-xl mx-auto p-4 space-y-6">
 
         <h2 className="text-xl font-bold">
-          Hola, {profile?.full_name}
+          Hola, {profile.full_name} 👋
         </h2>
 
-        {/* POSTURA */}
-        <div className="bg-yellow-400 p-4 rounded-xl flex justify-between">
-          <span>Postura total</span>
-          <span className="text-2xl font-bold">{postura}%</span>
-        </div>
-
-        {/* CONSUMO */}
         <div className="bg-white p-4 rounded-xl">
-          <h3 className="text-sm text-gray-400 mb-2">Consumo hoy</h3>
+          <p className="text-sm mb-2">
+            Progreso: {doneTasks}/{totalTasks}
+          </p>
 
-          {todayRecord ? (
-            <div className="grid grid-cols-2 gap-3">
-              <div>Docenas: {todayRecord.docenas_armadas}</div>
-              <div>Rotos: {todayRecord.huevos_rotos}</div>
-              <div>Bandejas: {todayRecord.bandejas_consumo}</div>
-              <div>Fértiles: {todayRecord.bandejas_fertiles}</div>
-            </div>
-          ) : (
-            <p className="text-gray-400">Sin datos</p>
-          )}
-        </div>
-
-        {/* FERTILES */}
-        <div className="bg-white p-4 rounded-xl">
-          <h3 className="text-sm text-gray-400 mb-2">Fértiles hoy</h3>
-
-          {todayFertile ? (
-            <div className="grid grid-cols-2 gap-3">
-              <div>Procesadas: {todayFertile.bandejas_procesadas}</div>
-              <div>Seleccionadas: {todayFertile.docenas_seleccionadas}</div>
-              <div>Descarte: {todayFertile.descarte}</div>
-            </div>
-          ) : (
-            <p className="text-gray-400">Sin datos</p>
-          )}
-        </div>
-
-        {/* ALERTAS */}
-        <div>
-          <h3 className="text-sm text-gray-400 mb-2">Alertas</h3>
-
-          {alerts.map((a, i) => (
-            <div key={i} className="bg-gray-100 p-2 rounded mb-2">
-              {a.message}
-            </div>
-          ))}
-        </div>
-
-        {/* MODULOS */}
-        <div className="grid grid-cols-2 gap-3">
-          <Link href="/dashboard/admin/lotes">Lotes</Link>
-          <Link href="/dashboard/admin/stock">Stock</Link>
-          <Link href="/dashboard/admin/tareas">Tareas</Link>
-          <Link href="/dashboard/admin/analisis">Análisis</Link>
+          <div className="w-full bg-gray-200 h-2 rounded">
+            <div
+              className="bg-yellow-400 h-2 rounded"
+              style={{ width: `${progress}%` }}
+            />
+          </div>
         </div>
 
         <Link
@@ -213,6 +252,28 @@ export default function AdminDashboard() {
           <Egg className="mr-2" />
           Registrar huevos
         </Link>
+
+        {dailyTasks.map(t => (
+          <TaskItem key={t.id} task={t} />
+        ))}
+
+        <div>
+          {stockItems.map(item => (
+            <div
+              key={item.id}
+              className="bg-white p-3 rounded mb-2 flex justify-between"
+            >
+              <span>{item.name}</span>
+
+              <button
+                onClick={() => handleUseItem(item)}
+                className="text-sm text-yellow-600"
+              >
+                Usar
+              </button>
+            </div>
+          ))}
+        </div>
 
       </div>
     </div>
