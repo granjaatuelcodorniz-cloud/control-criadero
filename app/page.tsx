@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { createClient } from '@/lib/supabase';
 import Image from 'next/image';
+import { useRouter } from 'next/navigation';
 
 export default function Login() {
   const [email, setEmail] = useState('');
@@ -10,6 +11,7 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const supabase = createClient();
+  const router = useRouter();
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -27,10 +29,13 @@ export default function Login() {
       return;
     }
 
-   if (data.user) {
-      // Forzamos un refresh total para que el Middleware tome las nuevas cookies
-      window.location.replace('/dashboard'); 
+    if (data.user) {
+      // Esperamos un poco para asegurar que la sesión esté lista
+      setTimeout(() => {
+        router.push('/dashboard');
+      }, 100);
     }
+  };
 
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
@@ -50,38 +55,12 @@ export default function Login() {
         <p className="text-gray-500 text-center mb-8">ControlCriadero — Granja Atuel</p>
 
         <form onSubmit={handleLogin} className="space-y-6">
-          <div>
-            <label className="block text-sm font-medium mb-2">Email</label>
-            <input
-              type="email"
-              value={email}
-              onChange={e => setEmail(e.target.value)}
-              className="input-base"
-              placeholder="tu@email.com"
-              required
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium mb-2">Contraseña</label>
-            <input
-              type="password"
-              value={password}
-              onChange={e => setPassword(e.target.value)}
-              className="input-base"
-              placeholder="Tu contraseña"
-              required
-            />
-          </div>
+          <input type="email" value={email} onChange={e => setEmail(e.target.value)} className="input-base" required />
+          <input type="password" value={password} onChange={e => setPassword(e.target.value)} className="input-base" required />
 
-          {error && (
-            <p className="text-red-600 text-center text-sm font-medium">{error}</p>
-          )}
+          {error && <p className="text-red-600 text-center text-sm">{error}</p>}
 
-          <button
-            type="submit"
-            disabled={loading}
-            className="btn-primary w-full py-4 text-xl font-semibold disabled:opacity-70"
-          >
+          <button type="submit" disabled={loading} className="btn-primary w-full py-4">
             {loading ? 'Ingresando...' : 'Ingresar'}
           </button>
         </form>

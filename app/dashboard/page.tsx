@@ -60,17 +60,22 @@ export default function Dashboard() {
   const today = new Date().toISOString().split('T')[0];
 
   useEffect(() => {
-    if (authLoading) return;
-    if (!user || !profile) {
-      router.push('/');
-      return;
-    }
-    if (profile.role === 'owner') {
-      router.push('/dashboard/admin');
-      return;
-    }
-    loadData();
-  }, [authLoading, user, profile]);
+   if (authLoading) return;
+
+   if (!user) {
+    router.push('/');
+    return;
+   }
+
+   if (!profile) return;
+
+   if (profile.role === 'owner') {
+    router.push('/dashboard/admin');
+    return;
+  }
+
+  loadData();
+}, [authLoading, user, profile]);
 
   const loadData = async () => {
     if (!user) return;

@@ -103,18 +103,22 @@ export default function AdminDashboard() {
   };
 
   useEffect(() => {
-    if (authLoading) return;
-    if (!user || !profile) { router.push('/'); return; }
-    if (profile.role !== 'owner') { router.push('/dashboard'); return; }
-    load();
-  }, [authLoading, user, profile]);
+   if (authLoading) return;
 
-  if (authLoading || loading) return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-      <p className="text-gray-400">Cargando...</p>
-    </div>
-  );
-  if (!profile) return null;
+   if (!user) {
+    router.push('/');
+    return;
+   }
+
+   if (!profile) return;
+
+   if (profile.role !== 'owner') {
+    router.push('/dashboard');
+    return;
+  }
+
+  load();
+}, [authLoading, user, profile]);
 
   // Cálculos consumo
   const totalHuevosConsumo = todayRecord

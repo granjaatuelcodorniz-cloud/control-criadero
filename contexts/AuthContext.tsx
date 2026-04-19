@@ -30,27 +30,37 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const supabase = createClient();
 
   const loadProfile = useCallback(async (userId: string) => {
-    try {
-      const { data } = await supabase
-        .from('profiles')
-        .select('full_name, role')
-        .eq('id', userId)
-        .single();
-      if (data) setProfile(data);
-    } catch (error) {
-      console.error("Error cargando perfil:", error);
-    }
+    const { data } = await supabase
+      .from('profiles')
+      .select('full_name, role')
+      .eq('id', userId)
+      .single();
+
+    if (data) setProfile(data);
   }, [supabase]);
 
   useEffect(() => {
     let mounted = true;
 
-    // Escuchamos los cambios de sesión de Supabase
+    const init = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+
+      if (!mounted) return;
+
+      if (session?.user) {
+        setUser(session.user);
+        await loadProfile(session.user.id);
+      }
+
+      setLoading(false);
+    };
+
+    init();
+
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
+      async (_event, session) => {
         if (!mounted) return;
 
-        // LOGICA "MATADORA" DE LOADING:
         if (session?.user) {
           setUser(session.user);
           await loadProfile(session.user.id);
@@ -59,10 +69,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setProfile(null);
         }
 
-        // Si el evento es salida o carga inicial fallida, soltamos el loading sí o sí
-        if (event === 'SIGNED_OUT' || event === 'INITIAL_SESSION' || (event === 'SIGNED_IN' && session)) {
-          setLoading(false);
-        }
+        setLoading(false);
       }
     );
 
@@ -72,27 +79,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, [supabase, loadProfile]);
 
-  // FUNCION SIGN OUT CON LIMPIEZA ATÓMICA
   const signOut = async () => {
-    try {
-      await supabase.auth.signOut();
-      
-      // Limpiamos los cachés del navegador para que Chrome no use datos viejos
-      if ('caches' in window) {
-        const names = await caches.keys();
-        await Promise.all(names.map(name => caches.delete(name)));
-      }
-      
-      // Limpieza de estados locales
-      setUser(null);
-      setProfile(null);
-      
-      // Redirección forzada limpiando el historial
-      window.location.replace('/');
-    } catch (error) {
-      console.error("Error al salir:", error);
-      window.location.href = '/';
-    }
+    await supabase.auth.signOut();
+    setUser(null);
+    setProfile(null);
+    window.location.href = '/';
   };
 
   return (
@@ -103,7 +94,5 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 }
 
 export function useAuth() {
-  const context = useContext(AuthContext);
-  if (!context) throw new Error('useAuth debe usarse dentro de un AuthProvider');
-  return context;
+  return useContext(AuthContext);
 }
