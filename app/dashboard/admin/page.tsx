@@ -2,28 +2,49 @@
 
 export const dynamic = 'force-dynamic';
 
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import { useRouter } from 'next/navigation';
 import Header from '@/components/Header';
 import Link from 'next/link';
 import {
-  TrendingUp,
-  Package,
-  AlertTriangle,
-  CheckCircle,
-  Egg
+  TrendingUp, Package, Heart, ClipboardList, BarChart2,
+  Clock, CheckCircle, AlertTriangle, Egg
 } from 'lucide-react';
+
+type DailyRecord = {
+  date: string;
+  registered_at: string | null;
+  bandejas_consumo: number;
+  bandejas_fertiles: number;
+  docenas_armadas: number;
+  huevos_rotos: number;
+  notas: string | null;
+};
+
+type FertileRecord = {
+  date: string;
+  registered_at: string | null;
+  bandejas_procesadas: number;
+  docenas_seleccionadas: number;
+  descarte: number;
+};
+
+type Alert = {
+  type: 'danger' | 'warning' | 'ok';
+  message: string;
+};
 
 export default function AdminDashboard() {
   const { user, profile, loading: authLoading } = useAuth();
   const router = useRouter();
 
   const [loading, setLoading] = useState(true);
+  const [todayRecord, setTodayRecord] = useState<DailyRecord | null>(null);
+  const [todayFertile, setTodayFertile] = useState<FertileRecord | null>(null);
+  const [alerts, setAlerts] = useState<Alert[]>([]);
   const [totalAves, setTotalAves] = useState(0);
-  const [huevosHoy, setHuevosHoy] = useState(0);
-  const [alertas, setAlertas] = useState<string[]>([]);
 
   const today = new Date().toISOString().split('T')[0];
 
@@ -40,157 +61,156 @@ export default function AdminDashboard() {
       return;
     }
 
-    load();
+    loadData();
   }, [authLoading, user, profile]);
 
-  const load = async () => {
-    try {
-      // 🐦 Total aves
-      const { data: lots } = await supabase
-        .from('lots')
-        .select('current_quantity');
+  const loadData = async () => {
+    setLoading(true);
 
-      if (lots) {
-        const total = lots.reduce((acc, l) => acc + l.current_quantity, 0);
-        setTotalAves(total);
-      }
+    const { data: todayData } = await supabase
+      .from('daily_records')
+      .select('*')
+      .eq('date', today)
+      .limit(1)
+      .maybeSingle();
 
-      // 🥚 Producción hoy
-      const { data: todayData } = await supabase
-        .from('daily_records')
-        .select('docenas_armadas, huevos_rotos')
-        .eq('date', today)
-        .limit(1);
+    setTodayRecord(todayData);
 
-      if (todayData && todayData.length > 0) {
-        const r = todayData[0];
-        const total = (r.docenas_armadas * 12) + r.huevos_rotos;
-        setHuevosHoy(total);
-      }
+    const { data: fertileData } = await supabase
+      .from('fertile_records')
+      .select('*')
+      .eq('date', today)
+      .limit(1)
+      .maybeSingle();
 
-      // ⚠️ Alertas stock
-      const { data: stock } = await supabase
-        .from('stock_items')
-        .select('name, current_quantity, alert_threshold');
+    setTodayFertile(fertileData);
 
-      const alerts: string[] = [];
+    const { data: lots } = await supabase
+      .from('lots')
+      .select('current_quantity');
 
-      if (stock) {
-        stock.forEach(item => {
-          if (item.current_quantity <= item.alert_threshold) {
-            alerts.push(`Stock bajo: ${item.name}`);
-          }
-        });
-      }
-
-      setAlertas(alerts);
-      setLoading(false);
-
-    } catch (err) {
-      console.error(err);
-      setLoading(false);
+    if (lots) {
+      setTotalAves(lots.reduce((s, l) => s + l.current_quantity, 0));
     }
+
+    const newAlerts: Alert[] = [];
+
+    const { data: stock } = await supabase
+      .from('stock_items')
+      .select('*');
+
+    if (stock) {
+      stock.forEach(item => {
+        if (item.current_quantity <= item.alert_threshold) {
+          newAlerts.push({
+            type: 'warning',
+            message: `Stock bajo: ${item.name}`
+          });
+        }
+      });
+    }
+
+    if (newAlerts.length === 0) {
+      newAlerts.push({ type: 'ok', message: 'Todo en orden' });
+    }
+
+    setAlerts(newAlerts);
+    setLoading(false);
   };
 
-  // 📊 KPI
-  const postura = useMemo(() => {
-    if (totalAves === 0 || huevosHoy === 0) return null;
-    return Math.round((huevosHoy / totalAves) * 100);
-  }, [totalAves, huevosHoy]);
-
-  // 🛑 PROTECCIÓN TOTAL (evita TODOS los errores)
-  if (authLoading || loading || !user || !profile) {
+  if (authLoading || loading || !profile) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <p className="text-gray-400">Cargando...</p>
+        <p>Cargando...</p>
       </div>
     );
   }
 
+  // cálculos seguros
+  const totalHuevos =
+    (todayRecord?.docenas_armadas ?? 0) * 12 +
+    (todayRecord?.huevos_rotos ?? 0) +
+    (todayFertile?.docenas_seleccionadas ?? 0) * 12;
+
+  const postura =
+    totalAves > 0 ? Math.round((totalHuevos / totalAves) * 100) : 0;
+
   return (
     <div className="min-h-screen bg-gray-50">
 
+      {/* 🔒 CLAVE: seguro contra null */}
       <Header
-        userName={profile?.full_name || ''}
+        userName={profile?.full_name || 'Usuario'}
         role={profile?.role || ''}
       />
 
-      <div className="max-w-2xl mx-auto px-4 py-6 space-y-6">
+      <div className="max-w-2xl mx-auto p-4 space-y-6">
 
-        {/* SALUDO */}
-        <div>
-          <h2 className="text-2xl font-bold">
-            Hola, {profile.full_name} 👋
-          </h2>
-          <p className="text-gray-500 text-sm">
-            {new Date().toLocaleDateString('es-AR', {
-              weekday: 'long',
-              day: 'numeric',
-              month: 'long'
-            })}
-          </p>
+        <h2 className="text-xl font-bold">
+          Hola, {profile?.full_name}
+        </h2>
+
+        {/* POSTURA */}
+        <div className="bg-yellow-400 p-4 rounded-xl flex justify-between">
+          <span>Postura total</span>
+          <span className="text-2xl font-bold">{postura}%</span>
         </div>
 
-        {/* KPI PRINCIPAL */}
-        <div className="bg-yellow-400 rounded-2xl p-5 flex justify-between items-center">
-          <div>
-            <p className="text-sm text-yellow-900">Postura hoy</p>
-            <p className="text-xs text-yellow-800">{totalAves} aves</p>
-          </div>
-          <p className="text-4xl font-bold text-yellow-900">
-            {postura !== null ? `${postura}%` : '—'}
-          </p>
+        {/* CONSUMO */}
+        <div className="bg-white p-4 rounded-xl">
+          <h3 className="text-sm text-gray-400 mb-2">Consumo hoy</h3>
+
+          {todayRecord ? (
+            <div className="grid grid-cols-2 gap-3">
+              <div>Docenas: {todayRecord.docenas_armadas}</div>
+              <div>Rotos: {todayRecord.huevos_rotos}</div>
+              <div>Bandejas: {todayRecord.bandejas_consumo}</div>
+              <div>Fértiles: {todayRecord.bandejas_fertiles}</div>
+            </div>
+          ) : (
+            <p className="text-gray-400">Sin datos</p>
+          )}
         </div>
 
-        {/* METRICAS */}
-        <div className="grid grid-cols-2 gap-3">
-          <div className="bg-white p-4 rounded-2xl border">
-            <p className="text-xs text-gray-400">Huevos hoy</p>
-            <p className="text-2xl font-bold">{huevosHoy}</p>
-          </div>
+        {/* FERTILES */}
+        <div className="bg-white p-4 rounded-xl">
+          <h3 className="text-sm text-gray-400 mb-2">Fértiles hoy</h3>
 
-          <div className="bg-white p-4 rounded-2xl border">
-            <p className="text-xs text-gray-400">Aves activas</p>
-            <p className="text-2xl font-bold">{totalAves}</p>
-          </div>
+          {todayFertile ? (
+            <div className="grid grid-cols-2 gap-3">
+              <div>Procesadas: {todayFertile.bandejas_procesadas}</div>
+              <div>Seleccionadas: {todayFertile.docenas_seleccionadas}</div>
+              <div>Descarte: {todayFertile.descarte}</div>
+            </div>
+          ) : (
+            <p className="text-gray-400">Sin datos</p>
+          )}
         </div>
 
         {/* ALERTAS */}
         <div>
-          <h3 className="text-xs text-gray-400 uppercase mb-2">Alertas</h3>
+          <h3 className="text-sm text-gray-400 mb-2">Alertas</h3>
 
-          {alertas.length === 0 ? (
-            <div className="bg-green-50 border border-green-100 rounded-2xl p-3 flex items-center gap-2 text-green-700">
-              <CheckCircle className="w-4 h-4" />
-              Todo en orden
+          {alerts.map((a, i) => (
+            <div key={i} className="bg-gray-100 p-2 rounded mb-2">
+              {a.message}
             </div>
-          ) : (
-            alertas.map((a, i) => (
-              <div key={i} className="bg-red-50 border border-red-100 rounded-2xl p-3 flex items-center gap-2 text-red-700 mb-2">
-                <AlertTriangle className="w-4 h-4" />
-                {a}
-              </div>
-            ))
-          )}
+          ))}
         </div>
 
         {/* MODULOS */}
         <div className="grid grid-cols-2 gap-3">
-          <Link href="/dashboard/admin/lotes" className="card">
-            <TrendingUp /> Lotes
-          </Link>
-
-          <Link href="/dashboard/admin/stock" className="card">
-            <Package /> Stock
-          </Link>
+          <Link href="/dashboard/admin/lotes">Lotes</Link>
+          <Link href="/dashboard/admin/stock">Stock</Link>
+          <Link href="/dashboard/admin/tareas">Tareas</Link>
+          <Link href="/dashboard/admin/analisis">Análisis</Link>
         </div>
 
-        {/* CTA */}
         <Link
           href="/dashboard/huevos"
-          className="btn-primary w-full py-4 flex items-center justify-center gap-2"
+          className="bg-yellow-400 p-4 rounded-xl flex justify-center"
         >
-          <Egg className="w-5 h-5" />
+          <Egg className="mr-2" />
           Registrar huevos
         </Link>
 
