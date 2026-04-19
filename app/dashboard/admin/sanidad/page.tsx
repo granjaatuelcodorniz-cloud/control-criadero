@@ -1,14 +1,12 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import Header from '@/components/Header';
-import { Plus, X } from 'lucide-react';
-// 1. Nuevos imports
+import { Plus, X, Syringe, Calendar, ClipboardList, Beaker } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useRouter } from 'next/navigation';
 
-type Profile = { full_name: string; role: 'owner' | 'collaborator' };
 type HealthRecord = {
   id: number;
   date: string;
@@ -18,12 +16,12 @@ type HealthRecord = {
   notes: string | null;
   next_application: string | null;
 };
+
 type Lot = { id: number; code: string };
 
 const TIPOS = ['Vitaminas', 'Antibiótico', 'Tratamiento', 'Limpieza profunda', 'Vacuna', 'Antiparasitario', 'Otro'];
 
 export default function Sanidad() {
-  // 2. Hook de autenticación (reemplaza al useState de profile)
   const { user, profile, loading: authLoading } = useAuth();
   const router = useRouter();
 
@@ -40,205 +38,214 @@ export default function Sanidad() {
   const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  // 3. Función loadData limpia (solo carga datos de salud y lotes)
-  const loadData = async () => {
-    setLoading(true);
+  // Carga de datos optimizada
+  const loadData = useCallback(async () => {
+    try {
+      setLoading(true);
+      const [recordsRes, lotsRes] = await Promise.all([
+        supabase.from('health_records').select('*').order('date', { ascending: false }),
+        supabase.from('lots').select('id, code').order('start_date', { ascending: false })
+      ]);
 
-    const { data: recordsData } = await supabase
-      .from('health_records').select('*')
-      .order('date', { ascending: false });
-    if (recordsData) setRecords(recordsData);
+      if (recordsRes.data) setRecords(recordsRes.data);
+      if (lotsRes.data) setLots(lotsRes.data);
+    } catch (error) {
+      console.error("Error cargando sanidad:", error);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
-    const { data: lotsData } = await supabase
-      .from('lots').select('id, code')
-      .order('start_date', { ascending: false });
-    if (lotsData) setLots(lotsData);
-
-    setLoading(false);
-  };
-
-  // 4. useEffect Guardián
   useEffect(() => {
     if (authLoading) return;
-    if (!user || !profile) { router.push('/'); return; }
-    if (profile.role !== 'owner') { router.push('/dashboard'); return; }
-    
+    if (!user || !profile) {
+      router.push('/');
+      return;
+    }
+    if (profile.role !== 'owner') {
+      router.push('/dashboard');
+      return;
+    }
     loadData();
-  }, [authLoading, user, profile]);
+  }, [authLoading, user, profile, router, loadData]);
 
   const handleSave = async () => {
     if (!tipo || !date || !user) return;
     setSaving(true);
+    try {
+      await supabase.from('health_records').insert({
+        date,
+        type: tipo,
+        lot_id: lotId ? Number(lotId) : null,
+        dosis: dosis.trim() || null,
+        notes: notes.trim() || null,
+        next_application: nextApp || null,
+        user_id: user.id,
+      });
 
-    await supabase.from('health_records').insert({
-      date,
-      type: tipo,
-      lot_id: lotId ? Number(lotId) : null,
-      dosis: dosis.trim() || null,
-      notes: notes.trim() || null,
-      next_application: nextApp || null,
-      user_id: user.id, // Usamos el ID del contexto global
-    });
-
-    setTipo(TIPOS[0]);
-    setLotId('');
-    setDosis('');
-    setNotes('');
-    setNextApp('');
-    setDate(new Date().toISOString().split('T')[0]);
-    setShowForm(false);
-    setSaving(false);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 3000);
-    await loadData();
+      setTipo(TIPOS[0]);
+      setLotId('');
+      setDosis('');
+      setNotes('');
+      setNextApp('');
+      setDate(new Date().toISOString().split('T')[0]);
+      setShowForm(false);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 3000);
+      await loadData();
+    } catch (error) {
+      console.error("Error al guardar:", error);
+    } finally {
+      setSaving(false);
+    }
   };
 
   const tipoColor = (t: string) => {
-    if (t === 'Antibiótico') return 'bg-red-50 text-red-700';
-    if (t === 'Vitaminas') return 'bg-green-50 text-green-700';
-    if (t === 'Limpieza profunda') return 'bg-blue-50 text-blue-700';
-    if (t === 'Vacuna') return 'bg-purple-50 text-purple-700';
-    if (t === 'Antiparasitario') return 'bg-orange-50 text-orange-700';
-    return 'bg-gray-50 text-gray-700';
+    switch (t) {
+      case 'Antibiótico': return 'bg-red-100 text-red-700 border-red-200';
+      case 'Vitaminas': return 'bg-emerald-100 text-emerald-700 border-emerald-200';
+      case 'Limpieza profunda': return 'bg-blue-100 text-blue-700 border-blue-200';
+      case 'Vacuna': return 'bg-purple-100 text-purple-700 border-purple-200';
+      case 'Antiparasitario': return 'bg-orange-100 text-orange-700 border-orange-200';
+      default: return 'bg-gray-100 text-gray-700 border-gray-200';
+    }
   };
 
   if (authLoading || loading) return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-      <p className="text-gray-400">Cargando...</p>
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6 text-center">
+      <div className="space-y-3">
+        <div className="w-10 h-10 border-4 border-yellow-400 border-t-transparent rounded-full animate-spin mx-auto"></div>
+        <p className="text-gray-500 font-medium text-sm">Cargando historial sanitario...</p>
+      </div>
     </div>
   );
 
-  if (!profile) return null;
-
   return (
     <div className="min-h-screen bg-gray-50">
-      <Header userName={profile.full_name} role={profile.role}
-        backHref="/dashboard/admin" backLabel="Dashboard" />
+      <Header 
+        userName={profile?.full_name || 'Usuario'} 
+        role={profile?.role || 'collaborator'}
+        backHref="/dashboard/admin" 
+        backLabel="Dashboard" 
+      />
 
       <div className="max-w-2xl mx-auto px-4 py-6 space-y-6">
-
         <div className="flex items-center justify-between">
           <h2 className="text-2xl font-bold text-gray-900">Sanidad</h2>
-          {saved && <span className="text-green-600 text-sm font-medium">✓ Guardado</span>}
+          {saved && <span className="text-green-600 text-sm font-bold animate-pulse">✓ Guardado</span>}
         </div>
 
         {!showForm ? (
-          <button onClick={() => setShowForm(true)} className="btn-primary w-full py-3 text-sm">
-            <Plus className="w-4 h-4" /> Registrar evento sanitario
+          <button 
+            onClick={() => setShowForm(true)} 
+            className="w-full py-4 bg-yellow-400 hover:bg-yellow-500 text-yellow-950 rounded-2xl font-bold flex items-center justify-center gap-2 shadow-lg shadow-yellow-200 transition-all active:scale-95"
+          >
+            <Plus className="w-5 h-5" /> Registrar evento sanitario
           </button>
         ) : (
-          <div className="bg-white rounded-2xl border border-gray-100 p-4 space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="font-semibold text-gray-800">Nuevo registro</h3>
-              <button onClick={() => setShowForm(false)}>
-                <X className="w-4 h-4 text-gray-400" />
+          <div className="bg-white rounded-3xl border-2 border-yellow-100 p-5 space-y-4 shadow-xl animate-in fade-in zoom-in duration-200">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="font-bold text-gray-800">Nuevo Registro</h3>
+              <button onClick={() => setShowForm(false)} className="p-2 hover:bg-gray-100 rounded-full">
+                <X className="w-5 h-5 text-gray-400" />
               </button>
             </div>
 
-            <div>
-              <label className="text-sm text-gray-600 mb-1 block">Tipo</label>
-              <select className="input-base" value={tipo} onChange={e => setTipo(e.target.value)}>
-                {TIPOS.map(t => <option key={t} value={t}>{t}</option>)}
-              </select>
+            <div className="grid grid-cols-1 gap-4">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[10px] font-black text-gray-400 uppercase ml-1">Tipo</label>
+                  <select className="input-base mt-1" value={tipo} onChange={e => setTipo(e.target.value)}>
+                    {TIPOS.map(t => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[10px] font-black text-gray-400 uppercase ml-1">Fecha</label>
+                  <input className="input-base mt-1" type="date" value={date} onChange={e => setDate(e.target.value)} />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-black text-gray-400 uppercase ml-1">Lote Destino</label>
+                <select className="input-base mt-1" value={lotId} onChange={e => setLotId(e.target.value)}>
+                  <option value="">Todo el plantel</option>
+                  {lots.map(l => <option key={l.id} value={l.id}>{l.code}</option>)}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[10px] font-black text-gray-400 uppercase ml-1">Dosis</label>
+                  <input className="input-base mt-1" placeholder="Ej: 2ml / litro" value={dosis} onChange={e => setDosis(e.target.value)} />
+                </div>
+                <div>
+                  <label className="text-[10px] font-black text-gray-400 uppercase ml-1">Próx. Aplicación</label>
+                  <input className="input-base mt-1" type="date" value={nextApp} onChange={e => setNextApp(e.target.value)} />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-black text-gray-400 uppercase ml-1">Notas</label>
+                <textarea className="input-base mt-1 h-20 py-3" placeholder="Observaciones..." value={notes} onChange={e => setNotes(e.target.value)} />
+              </div>
             </div>
 
-            <div>
-              <label className="text-sm text-gray-600 mb-1 block">Fecha</label>
-              <input className="input-base" type="date"
-                value={date} onChange={e => setDate(e.target.value)} />
-            </div>
-
-            <div>
-              <label className="text-sm text-gray-600 mb-1 block">Lote (opcional — vacío = todo el plantel)</label>
-              <select className="input-base" value={lotId} onChange={e => setLotId(e.target.value)}>
-                <option value="">Todo el plantel</option>
-                {lots.map(l => <option key={l.id} value={l.id}>{l.code}</option>)}
-              </select>
-            </div>
-
-            <div>
-              <label className="text-sm text-gray-600 mb-1 block">Dosis (opcional)</label>
-              <input className="input-base" placeholder="Ej: 2ml por litro de agua"
-                value={dosis} onChange={e => setDosis(e.target.value)} />
-            </div>
-
-            <div>
-              <label className="text-sm text-gray-600 mb-1 block">Próxima aplicación (opcional)</label>
-              <input className="input-base" type="date"
-                value={nextApp} onChange={e => setNextApp(e.target.value)} />
-            </div>
-
-            <div>
-              <label className="text-sm text-gray-600 mb-1 block">Notas (opcional)</label>
-              <textarea className="input-base" rows={3}
-                placeholder="Observaciones del tratamiento..."
-                value={notes} onChange={e => setNotes(e.target.value)} />
-            </div>
-
-            <button onClick={handleSave} disabled={saving}
-              className="btn-primary w-full py-3 text-sm">
-              {saving ? 'Guardando...' : 'Guardar registro'}
+            <button onClick={handleSave} disabled={saving} className="btn-primary w-full py-4 text-lg">
+              {saving ? 'Guardando...' : 'Guardar Registro'}
             </button>
           </div>
         )}
 
-        {records.length === 0 ? (
-          <div className="bg-white rounded-2xl border border-gray-100 p-6 text-center text-gray-400 text-sm">
-            Sin registros sanitarios todavía
-          </div>
-        ) : (
-          <div>
-            <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Historial</h3>
-            <div className="space-y-3">
-              {records.map(r => {
-                const lot = lots.find(l => l.id === r.lot_id);
-                return (
-                  <div key={r.id} className="bg-white rounded-2xl border border-gray-100 p-4">
-                    <div className="flex items-start justify-between mb-2">
-                      <div className="flex items-center gap-2">
-                        <span className={`text-xs font-semibold px-2 py-1 rounded-lg ${tipoColor(r.type)}`}>
-                          {r.type}
-                        </span>
-                        {lot && (
-                          <span className="text-xs text-gray-400 bg-gray-50 px-2 py-1 rounded-lg">
-                            {lot.code}
-                          </span>
-                        )}
-                        {!r.lot_id && (
-                          <span className="text-xs text-gray-400 bg-gray-50 px-2 py-1 rounded-lg">
-                            Todo el plantel
-                          </span>
-                        )}
-                      </div>
-                      <span className="text-xs text-gray-400">
-                        {new Date(r.date + 'T12:00:00').toLocaleDateString('es-AR', {
-                          day: 'numeric', month: 'short', year: 'numeric'
-                        })}
+        <div className="space-y-4">
+          <h3 className="text-xs font-black text-gray-400 uppercase tracking-widest ml-1">Historial Reciente</h3>
+          {records.length === 0 ? (
+            <div className="bg-white rounded-3xl border border-dashed border-gray-200 p-10 text-center">
+              <ClipboardList className="w-10 h-10 text-gray-200 mx-auto mb-3" />
+              <p className="text-gray-400 text-sm font-medium">No hay registros cargados</p>
+            </div>
+          ) : (
+            records.map(r => {
+              const lot = lots.find(l => l.id === r.lot_id);
+              return (
+                <div key={r.id} className="bg-white rounded-3xl border border-gray-100 p-5 shadow-sm">
+                  <div className="flex items-start justify-between mb-3">
+                    <div className="flex flex-wrap gap-2">
+                      <span className={`text-[10px] font-black px-2.5 py-1 rounded-full border uppercase tracking-tighter ${tipoColor(r.type)}`}>
+                        {r.type}
+                      </span>
+                      <span className="text-[10px] font-black px-2.5 py-1 rounded-full border border-gray-100 bg-gray-50 text-gray-500 uppercase tracking-tighter">
+                        {lot ? lot.code : 'Todo el plantel'}
                       </span>
                     </div>
+                    <span className="text-[10px] font-bold text-gray-400 bg-gray-50 px-2 py-1 rounded-lg">
+                      {new Date(r.date + 'T12:00:00').toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: '2-digit' })}
+                    </span>
+                  </div>
 
+                  <div className="space-y-2">
                     {r.dosis && (
-                      <p className="text-sm text-gray-600 mb-1">
-                        <span className="text-gray-400">Dosis:</span> {r.dosis}
-                      </p>
+                      <div className="flex items-center gap-2 text-sm text-gray-700">
+                        <Beaker className="w-4 h-4 text-gray-300" />
+                        <span className="font-medium">{r.dosis}</span>
+                      </div>
                     )}
                     {r.notes && (
-                      <p className="text-sm text-gray-600 mb-1">{r.notes}</p>
-                    )}
-                    {r.next_application && (
-                      <p className="text-xs text-blue-600 mt-2 bg-blue-50 px-2 py-1 rounded-lg inline-block">
-                        Próxima: {new Date(r.next_application + 'T12:00:00').toLocaleDateString('es-AR', {
-                          day: 'numeric', month: 'short', year: 'numeric'
-                        })}
+                      <p className="text-sm text-gray-600 leading-relaxed bg-gray-50/50 p-3 rounded-2xl italic">
+                        "{r.notes}"
                       </p>
                     )}
+                    {r.next_application && (
+                      <div className="flex items-center gap-2 text-xs font-bold text-blue-600 bg-blue-50 p-3 rounded-2xl border border-blue-100">
+                        <Calendar className="w-4 h-4" />
+                        Próxima aplicación: {new Date(r.next_application + 'T12:00:00').toLocaleDateString('es-AR')}
+                      </div>
+                    )}
                   </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
+                </div>
+              );
+            })
+          )}
+        </div>
       </div>
     </div>
   );
