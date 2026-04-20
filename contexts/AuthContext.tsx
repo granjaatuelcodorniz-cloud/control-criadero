@@ -4,7 +4,10 @@ import { createContext, useContext, useEffect, useState, useCallback } from 'rea
 import { createClient } from '@/lib/supabase';
 import { User } from '@supabase/supabase-js';
 
-type Profile = { full_name: string; role: 'owner' | 'collaborator' };
+type Profile = {
+  full_name: string;
+  role: 'owner' | 'collaborator';
+};
 
 type AuthContextType = {
   user: User | null;
@@ -14,7 +17,10 @@ type AuthContextType = {
 };
 
 const AuthContext = createContext<AuthContextType>({
-  user: null, profile: null, loading: true, signOut: async () => {},
+  user: null,
+  profile: null,
+  loading: true,
+  signOut: async () => {},
 });
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -24,46 +30,50 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const supabase = createClient();
 
   const loadProfile = useCallback(async (userId: string) => {
-    const { data } = await supabase.from('profiles').select('full_name, role').eq('id', userId).single();
+    const { data } = await supabase
+      .from('profiles')
+      .select('full_name, role')
+      .eq('id', userId)
+      .single();
     if (data) setProfile(data);
-  }, [supabase]);
+  }, []);
 
   useEffect(() => {
     let mounted = true;
 
     const init = async () => {
-      // Timeout de 2.5s para que el celu no se quede pegado si no hay buena señal
-      const timeout = new Promise((res) => setTimeout(res, 2500));
-      
-      try {
-        const { data: { session } } = await Promise.race([
-          supabase.auth.getSession(),
-          timeout
-        ]) as any;
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!mounted) return;
 
-        if (mounted && session?.user) {
-          setUser(session.user);
-          await loadProfile(session.user.id);
-        }
-      } finally {
-        if (mounted) setLoading(false);
+      if (user) {
+        setUser(user);
+        await loadProfile(user.id);
       }
+      setLoading(false);
     };
 
     init();
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (!mounted) return;
-      if (event === 'SIGNED_OUT') {
-        setUser(null); setProfile(null);
-      } else if (session?.user) {
-        setUser(session.user);
-        await loadProfile(session.user.id);
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      async (event, session) => {
+        if (!mounted) return;
+        if (event === 'SIGNED_OUT') {
+          setUser(null);
+          setProfile(null);
+          return;
+        }
+        if (session?.user) {
+          setUser(session.user);
+          await loadProfile(session.user.id);
+        }
       }
-    });
+    );
 
-    return () => { mounted = false; subscription.unsubscribe(); };
-  }, [loadProfile, supabase.auth]);
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
+  }, []);
 
   const signOut = async () => {
     await supabase.auth.signOut();
@@ -77,4 +87,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   );
 }
 
-export const useAuth = () => useContext(AuthContext);
+export function useAuth() {
+  return useContext(AuthContext);
+}
