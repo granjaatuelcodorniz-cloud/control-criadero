@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import { createContext, useContext, useEffect, useState } from 'react';
 import { createClient } from '@/lib/supabase';
 import { User } from '@supabase/supabase-js';
 
@@ -29,27 +29,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
   const supabase = createClient();
 
-  const loadProfile = useCallback(async (userId: string) => {
-    const { data } = await supabase
-      .from('profiles')
-      .select('full_name, role')
-      .eq('id', userId)
-      .single();
-    if (data) setProfile(data);
-  }, []);
+  const fetchProfile = async (userId: string) => {
+    try {
+      const { data } = await supabase
+        .from('profiles')
+        .select('full_name, role')
+        .eq('id', userId)
+        .single();
+      if (data) setProfile(data);
+    } catch {}
+  };
 
   useEffect(() => {
     let mounted = true;
 
     const init = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
+      // getSession es local — lee cookies sin llamada de red
+      const { data: { session } } = await supabase.auth.getSession();
+      
       if (!mounted) return;
 
-      if (user) {
-        setUser(user);
-        await loadProfile(user.id);
+      if (session?.user) {
+        setUser(session.user);
+        await fetchProfile(session.user.id);
       }
-      setLoading(false);
+      
+      if (mounted) setLoading(false);
     };
 
     init();
@@ -57,14 +62,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         if (!mounted) return;
+
         if (event === 'SIGNED_OUT') {
           setUser(null);
           setProfile(null);
           return;
         }
-        if (session?.user) {
+
+        if (event === 'SIGNED_IN' && session?.user) {
           setUser(session.user);
-          await loadProfile(session.user.id);
+          await fetchProfile(session.user.id);
+          if (mounted) setLoading(false);
+          return;
+        }
+
+        if (event === 'TOKEN_REFRESHED' && session?.user) {
+          setUser(session.user);
+          return;
         }
       }
     );
@@ -76,6 +90,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signOut = async () => {
+    setUser(null);
+    setProfile(null);
     await supabase.auth.signOut();
     window.location.href = '/';
   };
