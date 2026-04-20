@@ -4,10 +4,7 @@ import { createContext, useContext, useEffect, useState, useCallback } from 'rea
 import { createClient } from '@/lib/supabase';
 import { User } from '@supabase/supabase-js';
 
-type Profile = {
-  full_name: string;
-  role: 'owner' | 'collaborator';
-};
+type Profile = { full_name: string; role: 'owner' | 'collaborator' };
 
 type AuthContextType = {
   user: User | null;
@@ -17,10 +14,7 @@ type AuthContextType = {
 };
 
 const AuthContext = createContext<AuthContextType>({
-  user: null,
-  profile: null,
-  loading: true,
-  signOut: async () => {},
+  user: null, profile: null, loading: true, signOut: async () => {},
 });
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -30,61 +24,46 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const supabase = createClient();
 
   const loadProfile = useCallback(async (userId: string) => {
-    const { data } = await supabase
-      .from('profiles')
-      .select('full_name, role')
-      .eq('id', userId)
-      .single();
+    const { data } = await supabase.from('profiles').select('full_name, role').eq('id', userId).single();
     if (data) setProfile(data);
-  }, []);
+  }, [supabase]);
 
   useEffect(() => {
     let mounted = true;
 
     const init = async () => {
-  // 1. Creamos una promesa que se resuelve sí o sí en 2 segundos
-  const timeout = new Promise((resolve) => setTimeout(resolve, 2000));
+      // Timeout de 2.5s para que el celu no se quede pegado si no hay buena señal
+      const timeout = new Promise((res) => setTimeout(res, 2500));
+      
+      try {
+        const { data: { session } } = await Promise.race([
+          supabase.auth.getSession(),
+          timeout
+        ]) as any;
 
-  try {
-    // 2. Intentamos traer la sesión, pero no esperamos para siempre
-    const { data: { session } } = await Promise.race([
-      supabase.auth.getSession(),
-      timeout
-    ]) as any;
-
-    if (mounted && session?.user) {
-      setUser(session.user);
-      loadProfile(session.user.id); // Esto que corra de fondo
-    }
-  } catch (err) {
-    console.error("Fallo al iniciar:", err);
-  } finally {
-    if (mounted) setLoading(false); // ¡ESTO LIBERA LA PANTALLA!
-  }
-};
-
-    init();
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
-        if (!mounted) return;
-        if (event === 'SIGNED_OUT') {
-          setUser(null);
-          setProfile(null);
-          return;
-        }
-        if (session?.user) {
+        if (mounted && session?.user) {
           setUser(session.user);
           await loadProfile(session.user.id);
         }
+      } finally {
+        if (mounted) setLoading(false);
       }
-    );
-
-    return () => {
-      mounted = false;
-      subscription.unsubscribe();
     };
-  }, []);
+
+    init();
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (!mounted) return;
+      if (event === 'SIGNED_OUT') {
+        setUser(null); setProfile(null);
+      } else if (session?.user) {
+        setUser(session.user);
+        await loadProfile(session.user.id);
+      }
+    });
+
+    return () => { mounted = false; subscription.unsubscribe(); };
+  }, [loadProfile, supabase.auth]);
 
   const signOut = async () => {
     await supabase.auth.signOut();
@@ -98,6 +77,4 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   );
 }
 
-export function useAuth() {
-  return useContext(AuthContext);
-}
+export const useAuth = () => useContext(AuthContext);
