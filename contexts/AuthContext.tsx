@@ -42,15 +42,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     let mounted = true;
 
     const init = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!mounted) return;
+  try {
+    const { data: { session } } = await supabase.auth.getSession(); // getSession es más rápido para el primer render
+    if (!mounted) return;
 
-      if (user) {
-        setUser(user);
-        await loadProfile(user.id);
-      }
-      setLoading(false);
-    };
+    if (session?.user) {
+      setUser(session.user);
+      await loadProfile(session.user.id);
+    }
+  } catch (err) {
+    console.error("Error inicializando auth", err);
+  } finally {
+    if (mounted) setLoading(false); // SIEMPRE terminar la carga
+  }
+};
 
     init();
 
