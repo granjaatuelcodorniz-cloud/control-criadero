@@ -43,18 +43,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let mounted = true;
 
-    const init = async () => {
-      // getSession es local — lee cookies sin llamada de red
-      const { data: { session } } = await supabase.auth.getSession();
-      
-      if (!mounted) return;
-
-      if (session?.user) {
-        setUser(session.user);
-        await fetchProfile(session.user.id);
+    // Timeout de seguridad — máximo 3 segundos
+    // Si algo falla, loading pasa a false y el middleware maneja la redirección
+    const safetyTimeout = setTimeout(() => {
+      if (mounted && loading) {
+        setLoading(false);
       }
-      
-      if (mounted) setLoading(false);
+    }, 3000);
+
+    const init = async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!mounted) return;
+
+        if (session?.user) {
+          setUser(session.user);
+          await fetchProfile(session.user.id);
+        }
+      } catch (e) {
+        console.error('Auth init error:', e);
+      } finally {
+        if (mounted) {
+          clearTimeout(safetyTimeout);
+          setLoading(false);
+        }
+      }
     };
 
     init();
@@ -85,6 +98,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     return () => {
       mounted = false;
+      clearTimeout(safetyTimeout);
       subscription.unsubscribe();
     };
   }, []);
