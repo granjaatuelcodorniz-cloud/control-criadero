@@ -42,18 +42,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     let mounted = true;
 
     const init = async () => {
-  try {
-    const { data: { session } } = await supabase.auth.getSession(); // getSession es más rápido para el primer render
-    if (!mounted) return;
+  // 1. Creamos una promesa que se resuelve sí o sí en 2 segundos
+  const timeout = new Promise((resolve) => setTimeout(resolve, 2000));
 
-    if (session?.user) {
+  try {
+    // 2. Intentamos traer la sesión, pero no esperamos para siempre
+    const { data: { session } } = await Promise.race([
+      supabase.auth.getSession(),
+      timeout
+    ]) as any;
+
+    if (mounted && session?.user) {
       setUser(session.user);
-      await loadProfile(session.user.id);
+      loadProfile(session.user.id); // Esto que corra de fondo
     }
   } catch (err) {
-    console.error("Error inicializando auth", err);
+    console.error("Fallo al iniciar:", err);
   } finally {
-    if (mounted) setLoading(false); // SIEMPRE terminar la carga
+    if (mounted) setLoading(false); // ¡ESTO LIBERA LA PANTALLA!
   }
 };
 

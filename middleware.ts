@@ -11,7 +11,9 @@ export async function middleware(request: NextRequest) {
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
       cookies: {
-        getAll() { return request.cookies.getAll() },
+        getAll() {
+          return request.cookies.getAll()
+        },
         setAll(cookiesToSet) {
           cookiesToSet.forEach(({ name, value, options }) =>
             response.cookies.set(name, value, options)
@@ -21,20 +23,20 @@ export async function middleware(request: NextRequest) {
     }
   )
 
-  const { data: { user } } = await supabase.auth.getUser()
+  // ... (imports y creación de cliente igual)
+const { data: { user } } = await supabase.auth.getUser()
 
-  // REGLA 1: Si no hay usuario y quiere entrar al dashboard -> Al Login
-  if (!user && request.nextUrl.pathname.startsWith('/dashboard')) {
-    return NextResponse.redirect(new URL('/', request.url))
-  }
+// Si no hay usuario y quiere entrar al panel -> Login
+if (!user && request.nextUrl.pathname.startsWith('/dashboard')) {
+  return NextResponse.redirect(new URL('/', request.url))
+}
 
-  // REGLA 2: Si hay usuario y está en el Login -> Al Dashboard base
-  // No busques el perfil acá, hacelo en el cliente.
-  if (user && request.nextUrl.pathname === '/') {
-    return NextResponse.redirect(new URL('/dashboard', request.url))
-  }
+// Si hay usuario y está en el login -> Dashboard (sin preguntar el rol acá)
+if (user && request.nextUrl.pathname === '/') {
+  return NextResponse.redirect(new URL('/dashboard', request.url))
+}
 
-  return response
+return response
 }
 
 export const config = {

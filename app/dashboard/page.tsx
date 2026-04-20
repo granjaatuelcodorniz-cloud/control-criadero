@@ -26,34 +26,16 @@ export default function DashboardPage() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loadingTasks, setLoadingTasks] = useState(true);
 
-  // 2. Lógica de Redirección para el Dueño
   useEffect(() => {
-    if (!authLoading && profile?.role === 'owner') {
+  if (!authLoading && profile) {
+    if (profile.role === 'owner') {
       router.replace('/dashboard/admin');
+    } else {
+      // Si es Antonella, se queda acá o va a huevos
+      // router.replace('/dashboard/huevos'); 
     }
-  }, [profile, authLoading, router]);
-
-  // 3. Carga de tareas (Solo para colaboradores)
-  const fetchTasks = useCallback(async () => {
-    try {
-      const { data, error } = await supabase
-        .from('tasks')
-        .select('*')
-        .order('is_urgent', { ascending: false });
-
-      if (!error) setTasks(data || []);
-    } catch (err) {
-      console.error('Error fetching tasks:', err);
-    } finally {
-      setLoadingTasks(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (user && profile?.role === 'collaborator') {
-      fetchTasks();
-    }
-  }, [user, profile, fetchTasks]);
+  }
+}, [profile, authLoading, router]);
 
   // Pantalla de carga inicial
   if (authLoading || (profile?.role === 'owner')) {
