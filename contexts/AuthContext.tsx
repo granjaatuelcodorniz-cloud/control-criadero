@@ -43,35 +43,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let mounted = true;
 
-    // Timeout de seguridad — máximo 3 segundos
-    // Si algo falla, loading pasa a false y el middleware maneja la redirección
-    const safetyTimeout = setTimeout(() => {
-      if (mounted && loading) {
-        setLoading(false);
-      }
-    }, 3000);
-
-    const init = async () => {
-      try {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!mounted) return;
-
-        if (session?.user) {
-          setUser(session.user);
-          await fetchProfile(session.user.id);
-        }
-      } catch (e) {
-        console.error('Auth init error:', e);
-      } finally {
-        if (mounted) {
-          clearTimeout(safetyTimeout);
-          setLoading(false);
-        }
-      }
-    };
-
-    init();
-
+    // onAuthStateChange es el método más confiable — Supabase lo dispara
+    // inmediatamente con el estado actual de la sesión al montar
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         if (!mounted) return;
@@ -79,26 +52,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (event === 'SIGNED_OUT') {
           setUser(null);
           setProfile(null);
+          setLoading(false);
           return;
         }
 
-        if (event === 'SIGNED_IN' && session?.user) {
+        if (session?.user) {
           setUser(session.user);
-          await fetchProfile(session.user.id);
-          if (mounted) setLoading(false);
-          return;
+          if (!profile) await fetchProfile(session.user.id);
+        } else {
+          setUser(null);
+          setProfile(null);
         }
 
-        if (event === 'TOKEN_REFRESHED' && session?.user) {
-          setUser(session.user);
-          return;
-        }
+        setLoading(false);
       }
     );
 
     return () => {
       mounted = false;
-      clearTimeout(safetyTimeout);
       subscription.unsubscribe();
     };
   }, []);
