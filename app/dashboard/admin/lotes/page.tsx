@@ -1,9 +1,9 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { supabase } from '@/lib/supabase';
+import { createClient } from '@/lib/supabase';
 import Header from '@/components/Header';
-import { Plus, X, TrendingUp, Users, Skull } from 'lucide-react';
+import { Plus, X, TrendingUp, Skull } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useRouter } from 'next/navigation';
 
@@ -27,6 +27,7 @@ type Loss = {
 export default function Lotes() {
   const { user, profile, loading: authLoading } = useAuth();
   const router = useRouter();
+  const supabase = createClient();
 
   const [lots, setLots] = useState<Lot[]>([]);
   const [losses, setLosses] = useState<Loss[]>([]);
@@ -40,7 +41,6 @@ export default function Lotes() {
   const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  // Carga de datos optimizada con Promise.all
   const loadData = useCallback(async () => {
     try {
       setLoading(true);
@@ -53,33 +53,25 @@ export default function Lotes() {
         supabase.from('daily_records')
           .select('date, docenas_armadas, huevos_rotos')
           .gte('date', sevenDaysAgo.toISOString().split('T')[0])
-          .order('date')
+          .order('date'),
       ]);
 
       if (lotsRes.data) setLots(lotsRes.data);
       if (lossesRes.data) setLosses(lossesRes.data);
       if (recordsRes.data) setWeekRecords(recordsRes.data);
-
     } catch (error) {
-      console.error("Error cargando datos:", error);
+      console.error('Error cargando datos:', error);
     } finally {
       setLoading(false);
     }
   }, []);
 
-  // Guardián de acceso y carga inicial
   useEffect(() => {
     if (authLoading) return;
-    if (!user || !profile) {
-      router.push('/');
-      return;
-    }
-    if (profile.role !== 'owner') {
-      router.push('/dashboard');
-      return;
-    }
+    if (!user || !profile) { router.push('/'); return; }
+    if (profile.role !== 'owner') { router.push('/dashboard'); return; }
     loadData();
-  }, [authLoading, user, profile, router, loadData]);
+  }, [authLoading, user, profile]);
 
   const handleNewLot = async () => {
     if (!newCode.trim() || newQty <= 0 || !user) return;
@@ -93,7 +85,6 @@ export default function Lotes() {
         notes: newNotes.trim() || null,
         created_by: user.id,
       });
-
       setNewCode('');
       setNewQty(0);
       setNewNotes('');
@@ -102,7 +93,7 @@ export default function Lotes() {
       setTimeout(() => setSaved(false), 3000);
       await loadData();
     } catch (error) {
-      console.error("Error al guardar lote:", error);
+      console.error('Error al guardar lote:', error);
     } finally {
       setSaving(false);
     }
@@ -119,30 +110,28 @@ export default function Lotes() {
     const totalHuevos = weekRecords.reduce((s, r) => s + (r.docenas_armadas * 12) + r.huevos_rotos, 0);
     const totalAvesActivas = lots.reduce((s, l) => s + l.current_quantity, 0);
     if (totalAvesActivas === 0) return null;
-    
-    // Promedio de postura semanal por ave
     const promedioDiario = totalHuevos / (weekRecords.length * totalAvesActivas);
     return Math.round(promedioDiario * 100);
   };
 
-  if (authLoading || loading) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6 text-center">
-        <div className="space-y-3">
-          <div className="w-10 h-10 border-4 border-yellow-400 border-t-transparent rounded-full animate-spin mx-auto"></div>
-          <p className="text-gray-500 font-medium">Cargando lotes...</p>
-        </div>
+  if (authLoading || loading) return (
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="space-y-3 text-center">
+        <div className="w-10 h-10 border-4 border-yellow-400 border-t-transparent rounded-full animate-spin mx-auto" />
+        <p className="text-gray-500 font-medium">Cargando lotes...</p>
       </div>
-    );
-  }
+    </div>
+  );
+
+  if (!profile) return null;
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <Header 
-        userName={profile?.full_name || 'Usuario'} 
-        role={profile?.role || 'collaborator'}
-        backHref="/dashboard/admin" 
-        backLabel="Dashboard" 
+      <Header
+        userName={profile.full_name}
+        role={profile.role}
+        backHref="/dashboard/admin"
+        backLabel="Dashboard"
       />
 
       <div className="max-w-2xl mx-auto px-4 py-6 space-y-6">
@@ -177,18 +166,16 @@ export default function Lotes() {
                 </div>
 
                 <div className="grid grid-cols-3 gap-3 mb-5">
-                  <div className="bg-gray-50 rounded-2xl p-3 text-center">
-                    <p className="text-[10px] text-gray-400 uppercase font-bold mb-1">Inicial</p>
-                    <p className="text-xl font-black text-gray-800">{lot.initial_quantity}</p>
-                  </div>
-                  <div className="bg-blue-50 rounded-2xl p-3 text-center border border-blue-100">
-                    <p className="text-[10px] text-blue-400 uppercase font-bold mb-1">Activas</p>
-                    <p className="text-xl font-black text-blue-700">{lot.current_quantity}</p>
-                  </div>
-                  <div className="bg-red-50 rounded-2xl p-3 text-center border border-red-100">
-                    <p className="text-[10px] text-red-400 uppercase font-bold mb-1">Bajas</p>
-                    <p className="text-xl font-black text-red-700">{lot.initial_quantity - lot.current_quantity}</p>
-                  </div>
+                  {[
+                    { label: 'Inicial', value: lot.initial_quantity, cls: 'bg-gray-50' },
+                    { label: 'Activas', value: lot.current_quantity, cls: 'bg-blue-50 border border-blue-100 text-blue-700' },
+                    { label: 'Bajas', value: lot.initial_quantity - lot.current_quantity, cls: 'bg-red-50 border border-red-100 text-red-700' },
+                  ].map((m, i) => (
+                    <div key={i} className={`rounded-2xl p-3 text-center ${m.cls}`}>
+                      <p className="text-[10px] font-bold uppercase mb-1 opacity-60">{m.label}</p>
+                      <p className="text-xl font-black">{m.value}</p>
+                    </div>
+                  ))}
                 </div>
 
                 <div className="space-y-1.5 mb-4">
@@ -208,7 +195,7 @@ export default function Lotes() {
                   <div className="bg-gray-50 rounded-2xl p-3">
                     <div className="flex items-center gap-2 mb-2 text-gray-500">
                       <Skull className="w-3 h-3" />
-                      <p className="text-[10px] font-bold uppercase tracking-tight">Registro de bajas recientes</p>
+                      <p className="text-[10px] font-bold uppercase tracking-tight">Bajas recientes</p>
                     </div>
                     <div className="space-y-2">
                       {bajasRelacionadas.slice(0, 2).map(b => (
@@ -227,10 +214,8 @@ export default function Lotes() {
         </div>
 
         {!showNewLot ? (
-          <button
-            onClick={() => setShowNewLot(true)}
-            className="w-full py-5 rounded-3xl border-2 border-dashed border-gray-200 text-gray-400 hover:border-yellow-400 hover:text-yellow-600 hover:bg-yellow-50/50 transition-all flex items-center justify-center gap-3 font-bold"
-          >
+          <button onClick={() => setShowNewLot(true)}
+            className="w-full py-5 rounded-3xl border-2 border-dashed border-gray-200 text-gray-400 hover:border-yellow-400 hover:text-yellow-600 hover:bg-yellow-50/50 transition-all flex items-center justify-center gap-3 font-bold">
             <Plus className="w-5 h-5" /> Agregar Nuevo Lote
           </button>
         ) : (
@@ -241,7 +226,6 @@ export default function Lotes() {
                 <X className="w-5 h-5 text-gray-400" />
               </button>
             </div>
-            
             <div className="grid grid-cols-1 gap-4">
               <div>
                 <label className="text-xs font-bold text-gray-500 uppercase ml-1">Nombre / Código</label>
@@ -251,24 +235,20 @@ export default function Lotes() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="text-xs font-bold text-gray-500 uppercase ml-1">Fecha Ingreso</label>
-                  <input className="input-base mt-1" type="date"
-                    value={newDate} onChange={e => setNewDate(e.target.value)} />
+                  <input className="input-base mt-1" type="date" value={newDate} onChange={e => setNewDate(e.target.value)} />
                 </div>
                 <div>
                   <label className="text-xs font-bold text-gray-500 uppercase ml-1">Cant. Aves</label>
-                  <input className="input-base mt-1" type="number"
-                    value={newQty} onChange={e => setNewQty(Number(e.target.value))} />
+                  <input className="input-base mt-1" type="number" value={newQty} onChange={e => setNewQty(Number(e.target.value))} />
                 </div>
               </div>
               <div>
                 <label className="text-xs font-bold text-gray-500 uppercase ml-1">Notas</label>
-                <textarea className="input-base mt-1 h-20 py-3" placeholder="Detalles de la compra o lote..."
+                <textarea className="input-base mt-1 h-20 py-3" placeholder="Detalles del lote..."
                   value={newNotes} onChange={e => setNewNotes(e.target.value)} />
               </div>
             </div>
-
-            <button onClick={handleNewLot} disabled={saving}
-              className="btn-primary w-full py-4 text-lg shadow-yellow-200 shadow-lg">
+            <button onClick={handleNewLot} disabled={saving} className="btn-primary w-full py-4 text-lg shadow-yellow-200 shadow-lg">
               {saving ? 'Guardando...' : 'Confirmar Ingreso'}
             </button>
           </div>

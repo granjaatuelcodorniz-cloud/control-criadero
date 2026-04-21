@@ -1,8 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { createClient } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
-import { supabase } from '@/lib/supabase';
 import Header from '@/components/Header';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -35,6 +35,8 @@ type StockItem = {
 export default function Dashboard() {
   const { user, profile, loading: authLoading } = useAuth();
   const router = useRouter();
+  const supabase = createClient();
+
   const [dailyTasks, setDailyTasks] = useState<Task[]>([]);
   const [periodicTasks, setPeriodicTasks] = useState<Task[]>([]);
   const [customTasks, setCustomTasks] = useState<Task[]>([]);
@@ -113,7 +115,7 @@ export default function Dashboard() {
       setCompletedIds(prev => prev.filter(id => id !== taskId));
     } else {
       await supabase.from('task_completions').insert({
-        task_id: taskId, user_id: user.id, completed: true, date: today
+        task_id: taskId, user_id: user.id, completed: true, date: today,
       });
       setCompletedIds(prev => [...prev, taskId]);
     }
@@ -125,7 +127,7 @@ export default function Dashboard() {
 
     await supabase.from('lot_losses').insert({
       lot_id: Number(selectedLot), quantity: lossQty,
-      reason: lossReason.trim() || null, user_id: user.id, date: today
+      reason: lossReason.trim() || null, user_id: user.id, date: today,
     });
 
     await supabase.from('lots')
@@ -223,7 +225,11 @@ export default function Dashboard() {
       >
         <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition-all
           ${isDone ? 'bg-yellow-400 border-yellow-400' : 'border-gray-300'}`}>
-          {isDone && <svg viewBox="0 0 12 12" className="w-3 h-3"><polyline points="2,6 5,9 10,3" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round"/></svg>}
+          {isDone && (
+            <svg viewBox="0 0 12 12" className="w-3 h-3">
+              <polyline points="2,6 5,9 10,3" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" />
+            </svg>
+          )}
         </div>
         <div className="flex-1">
           <span className={`text-base ${isDone ? 'line-through text-gray-400' : 'text-gray-800'}`}>
@@ -331,6 +337,7 @@ export default function Dashboard() {
           )}
         </div>
 
+        {/* Baja de ave */}
         <div>
           <div className="flex items-center justify-between mb-3">
             <h3 className="font-semibold text-gray-700 text-sm uppercase tracking-wide">Baja de ave</h3>

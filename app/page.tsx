@@ -10,7 +10,6 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const supabase = createClient();
   const router = useRouter();
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -18,6 +17,7 @@ export default function Login() {
     setLoading(true);
     setError('');
 
+    const supabase = createClient();
     const { data, error: signInError } = await supabase.auth.signInWithPassword({
       email: email.trim(),
       password,
@@ -30,10 +30,10 @@ export default function Login() {
     }
 
     if (data.user) {
-      // Esperamos un poco para asegurar que la sesión esté lista
-      setTimeout(() => {
-        router.push('/dashboard');
-      }, 100);
+      // router.refresh() notifica a Next.js que la sesión cambió.
+      // El middleware detecta al usuario y redirige al destino correcto según rol,
+      // sin necesidad de hardcodear la ruta ni usar setTimeout.
+      router.refresh();
     }
   };
 
@@ -55,8 +55,22 @@ export default function Login() {
         <p className="text-gray-500 text-center mb-8">ControlCriadero — Granja Atuel</p>
 
         <form onSubmit={handleLogin} className="space-y-6">
-          <input type="email" value={email} onChange={e => setEmail(e.target.value)} className="input-base" required />
-          <input type="password" value={password} onChange={e => setPassword(e.target.value)} className="input-base" required />
+          <input
+            type="email"
+            placeholder="Email"
+            value={email}
+            onChange={e => setEmail(e.target.value)}
+            className="input-base"
+            required
+          />
+          <input
+            type="password"
+            placeholder="Contraseña"
+            value={password}
+            onChange={e => setPassword(e.target.value)}
+            className="input-base"
+            required
+          />
 
           {error && <p className="text-red-600 text-center text-sm">{error}</p>}
 

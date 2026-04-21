@@ -1,9 +1,9 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { supabase } from '@/lib/supabase';
+import { createClient } from '@/lib/supabase';
 import Header from '@/components/Header';
-import { Plus, X, Syringe, Calendar, ClipboardList, Beaker } from 'lucide-react';
+import { Plus, X, Calendar, ClipboardList, Beaker } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useRouter } from 'next/navigation';
 
@@ -24,6 +24,7 @@ const TIPOS = ['Vitaminas', 'Antibiótico', 'Tratamiento', 'Limpieza profunda', 
 export default function Sanidad() {
   const { user, profile, loading: authLoading } = useAuth();
   const router = useRouter();
+  const supabase = createClient();
 
   const [records, setRecords] = useState<HealthRecord[]>([]);
   const [lots, setLots] = useState<Lot[]>([]);
@@ -38,19 +39,17 @@ export default function Sanidad() {
   const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  // Carga de datos optimizada
   const loadData = useCallback(async () => {
     try {
       setLoading(true);
       const [recordsRes, lotsRes] = await Promise.all([
         supabase.from('health_records').select('*').order('date', { ascending: false }),
-        supabase.from('lots').select('id, code').order('start_date', { ascending: false })
+        supabase.from('lots').select('id, code').order('start_date', { ascending: false }),
       ]);
-
       if (recordsRes.data) setRecords(recordsRes.data);
       if (lotsRes.data) setLots(lotsRes.data);
     } catch (error) {
-      console.error("Error cargando sanidad:", error);
+      console.error('Error cargando sanidad:', error);
     } finally {
       setLoading(false);
     }
@@ -58,16 +57,10 @@ export default function Sanidad() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!user || !profile) {
-      router.push('/');
-      return;
-    }
-    if (profile.role !== 'owner') {
-      router.push('/dashboard');
-      return;
-    }
+    if (!user || !profile) { router.push('/'); return; }
+    if (profile.role !== 'owner') { router.push('/dashboard'); return; }
     loadData();
-  }, [authLoading, user, profile, router, loadData]);
+  }, [authLoading, user, profile]);
 
   const handleSave = async () => {
     if (!tipo || !date || !user) return;
@@ -82,7 +75,6 @@ export default function Sanidad() {
         next_application: nextApp || null,
         user_id: user.id,
       });
-
       setTipo(TIPOS[0]);
       setLotId('');
       setDosis('');
@@ -94,7 +86,7 @@ export default function Sanidad() {
       setTimeout(() => setSaved(false), 3000);
       await loadData();
     } catch (error) {
-      console.error("Error al guardar:", error);
+      console.error('Error al guardar:', error);
     } finally {
       setSaving(false);
     }
@@ -112,21 +104,23 @@ export default function Sanidad() {
   };
 
   if (authLoading || loading) return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6 text-center">
-      <div className="space-y-3">
-        <div className="w-10 h-10 border-4 border-yellow-400 border-t-transparent rounded-full animate-spin mx-auto"></div>
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="space-y-3 text-center">
+        <div className="w-10 h-10 border-4 border-yellow-400 border-t-transparent rounded-full animate-spin mx-auto" />
         <p className="text-gray-500 font-medium text-sm">Cargando historial sanitario...</p>
       </div>
     </div>
   );
 
+  if (!profile) return null;
+
   return (
     <div className="min-h-screen bg-gray-50">
-      <Header 
-        userName={profile?.full_name || 'Usuario'} 
-        role={profile?.role || 'collaborator'}
-        backHref="/dashboard/admin" 
-        backLabel="Dashboard" 
+      <Header
+        userName={profile.full_name}
+        role={profile.role}
+        backHref="/dashboard/admin"
+        backLabel="Dashboard"
       />
 
       <div className="max-w-2xl mx-auto px-4 py-6 space-y-6">
@@ -136,60 +130,51 @@ export default function Sanidad() {
         </div>
 
         {!showForm ? (
-          <button 
-            onClick={() => setShowForm(true)} 
-            className="w-full py-4 bg-yellow-400 hover:bg-yellow-500 text-yellow-950 rounded-2xl font-bold flex items-center justify-center gap-2 shadow-lg shadow-yellow-200 transition-all active:scale-95"
-          >
+          <button onClick={() => setShowForm(true)}
+            className="w-full py-4 bg-yellow-400 hover:bg-yellow-500 text-yellow-950 rounded-2xl font-bold flex items-center justify-center gap-2 shadow-lg shadow-yellow-200 transition-all active:scale-95">
             <Plus className="w-5 h-5" /> Registrar evento sanitario
           </button>
         ) : (
-          <div className="bg-white rounded-3xl border-2 border-yellow-100 p-5 space-y-4 shadow-xl animate-in fade-in zoom-in duration-200">
+          <div className="bg-white rounded-3xl border-2 border-yellow-100 p-5 space-y-4 shadow-xl">
             <div className="flex items-center justify-between mb-2">
               <h3 className="font-bold text-gray-800">Nuevo Registro</h3>
               <button onClick={() => setShowForm(false)} className="p-2 hover:bg-gray-100 rounded-full">
                 <X className="w-5 h-5 text-gray-400" />
               </button>
             </div>
-
-            <div className="grid grid-cols-1 gap-4">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-[10px] font-black text-gray-400 uppercase ml-1">Tipo</label>
-                  <select className="input-base mt-1" value={tipo} onChange={e => setTipo(e.target.value)}>
-                    {TIPOS.map(t => <option key={t} value={t}>{t}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="text-[10px] font-black text-gray-400 uppercase ml-1">Fecha</label>
-                  <input className="input-base mt-1" type="date" value={date} onChange={e => setDate(e.target.value)} />
-                </div>
-              </div>
-
+            <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="text-[10px] font-black text-gray-400 uppercase ml-1">Lote Destino</label>
-                <select className="input-base mt-1" value={lotId} onChange={e => setLotId(e.target.value)}>
-                  <option value="">Todo el plantel</option>
-                  {lots.map(l => <option key={l.id} value={l.id}>{l.code}</option>)}
+                <label className="text-[10px] font-black text-gray-400 uppercase ml-1">Tipo</label>
+                <select className="input-base mt-1" value={tipo} onChange={e => setTipo(e.target.value)}>
+                  {TIPOS.map(t => <option key={t} value={t}>{t}</option>)}
                 </select>
               </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-[10px] font-black text-gray-400 uppercase ml-1">Dosis</label>
-                  <input className="input-base mt-1" placeholder="Ej: 2ml / litro" value={dosis} onChange={e => setDosis(e.target.value)} />
-                </div>
-                <div>
-                  <label className="text-[10px] font-black text-gray-400 uppercase ml-1">Próx. Aplicación</label>
-                  <input className="input-base mt-1" type="date" value={nextApp} onChange={e => setNextApp(e.target.value)} />
-                </div>
-              </div>
-
               <div>
-                <label className="text-[10px] font-black text-gray-400 uppercase ml-1">Notas</label>
-                <textarea className="input-base mt-1 h-20 py-3" placeholder="Observaciones..." value={notes} onChange={e => setNotes(e.target.value)} />
+                <label className="text-[10px] font-black text-gray-400 uppercase ml-1">Fecha</label>
+                <input className="input-base mt-1" type="date" value={date} onChange={e => setDate(e.target.value)} />
               </div>
             </div>
-
+            <div>
+              <label className="text-[10px] font-black text-gray-400 uppercase ml-1">Lote Destino</label>
+              <select className="input-base mt-1" value={lotId} onChange={e => setLotId(e.target.value)}>
+                <option value="">Todo el plantel</option>
+                {lots.map(l => <option key={l.id} value={l.id}>{l.code}</option>)}
+              </select>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-[10px] font-black text-gray-400 uppercase ml-1">Dosis</label>
+                <input className="input-base mt-1" placeholder="Ej: 2ml / litro" value={dosis} onChange={e => setDosis(e.target.value)} />
+              </div>
+              <div>
+                <label className="text-[10px] font-black text-gray-400 uppercase ml-1">Próx. Aplicación</label>
+                <input className="input-base mt-1" type="date" value={nextApp} onChange={e => setNextApp(e.target.value)} />
+              </div>
+            </div>
+            <div>
+              <label className="text-[10px] font-black text-gray-400 uppercase ml-1">Notas</label>
+              <textarea className="input-base mt-1 h-20 py-3" placeholder="Observaciones..." value={notes} onChange={e => setNotes(e.target.value)} />
+            </div>
             <button onClick={handleSave} disabled={saving} className="btn-primary w-full py-4 text-lg">
               {saving ? 'Guardando...' : 'Guardar Registro'}
             </button>
@@ -221,7 +206,6 @@ export default function Sanidad() {
                       {new Date(r.date + 'T12:00:00').toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: '2-digit' })}
                     </span>
                   </div>
-
                   <div className="space-y-2">
                     {r.dosis && (
                       <div className="flex items-center gap-2 text-sm text-gray-700">
@@ -230,9 +214,7 @@ export default function Sanidad() {
                       </div>
                     )}
                     {r.notes && (
-                      <p className="text-sm text-gray-600 leading-relaxed bg-gray-50/50 p-3 rounded-2xl italic">
-                        "{r.notes}"
-                      </p>
+                      <p className="text-sm text-gray-600 leading-relaxed bg-gray-50/50 p-3 rounded-2xl italic">"{r.notes}"</p>
                     )}
                     {r.next_application && (
                       <div className="flex items-center gap-2 text-xs font-bold text-blue-600 bg-blue-50 p-3 rounded-2xl border border-blue-100">

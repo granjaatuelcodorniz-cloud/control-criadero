@@ -6,38 +6,30 @@ import { useRouter } from 'next/navigation';
 
 export default function AppVisibilityHandler() {
   const router = useRouter();
-  const supabase = createClient();
 
   useEffect(() => {
     const handleVisibilityChange = async () => {
-      // Solo actuamos cuando la app vuelve a estar visible
-      if (document.visibilityState === 'visible') {
-        try {
-          // Usamos getSession con un timeout implícito o rápido
-          const { data: { session }, error } = await supabase.auth.getSession();
-          
-          if (error) {
-            console.error("Error al recuperar sesión al volver:", error.message);
-            return;
-          }
+      if (document.visibilityState !== 'visible') return
 
-          // Si la sesión desapareció mientras la app estaba en segundo plano,
-          // mandamos al usuario al inicio para que no vea una pantalla rota.
-          if (!session) {
-            router.replace('/');
-          }
-        } catch (err) {
-          console.error("Fallo crítico al despertar la app:", err);
+      try {
+        // createClient() fresco cada vez — nunca usar instancia cacheada
+        // getUser() valida contra el servidor, a diferencia de getSession()
+        const supabase = createClient()
+        const { data: { user }, error } = await supabase.auth.getUser()
+
+        if (error || !user) {
+          router.replace('/')
         }
+      } catch (err) {
+        console.error('Error al verificar sesión al volver a la app:', err)
       }
-    };
+    }
 
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    
+    document.addEventListener('visibilitychange', handleVisibilityChange)
     return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-  }, [router, supabase.auth]);
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
+  }, [router])
 
-  return null;
+  return null
 }

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { supabase } from '@/lib/supabase';
+import { createClient } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import { useRouter } from 'next/navigation';
 import Header from '@/components/Header';
@@ -20,6 +20,7 @@ type DailyRecord = {
   huevos_rotos: number;
   notas: string | null;
 };
+
 type FertileRecord = {
   date: string;
   registered_at: string | null;
@@ -27,11 +28,14 @@ type FertileRecord = {
   docenas_seleccionadas: number;
   descarte: number;
 };
+
 type Alert = { type: 'danger' | 'warning' | 'ok'; message: string };
 
 export default function AdminDashboard() {
   const { user, profile, loading: authLoading } = useAuth();
   const router = useRouter();
+  const supabase = createClient();
+
   const [todayRecord, setTodayRecord] = useState<DailyRecord | null>(null);
   const [todayFertile, setTodayFertile] = useState<FertileRecord | null>(null);
   const [weekRecords, setWeekRecords] = useState<DailyRecord[]>([]);
@@ -47,14 +51,14 @@ export default function AdminDashboard() {
       .eq('date', today)
       .order('created_at', { ascending: false })
       .limit(1);
-    if (todayData && todayData.length > 0) setTodayRecord(todayData[0]);
+    if (todayData?.[0]) setTodayRecord(todayData[0]);
 
     const { data: fertileData } = await supabase
       .from('fertile_records').select('*')
       .eq('date', today)
       .order('created_at', { ascending: false })
       .limit(1);
-    if (fertileData && fertileData.length > 0) setTodayFertile(fertileData[0]);
+    if (fertileData?.[0]) setTodayFertile(fertileData[0]);
 
     const sevenDaysAgo = new Date();
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
@@ -77,7 +81,7 @@ export default function AdminDashboard() {
         if (item.current_quantity <= item.alert_threshold) {
           newAlerts.push({
             type: item.current_quantity === 0 ? 'danger' : 'warning',
-            message: `Stock de ${item.name} bajo mínimo (${item.current_quantity} ${item.unit ?? ''})`
+            message: `Stock de ${item.name} bajo mínimo (${item.current_quantity} ${item.unit ?? ''})`,
           });
         }
       });
@@ -111,6 +115,7 @@ export default function AdminDashboard() {
       <p className="text-gray-400">Cargando...</p>
     </div>
   );
+
   if (!profile) return null;
 
   const totalHuevosConsumo = todayRecord
