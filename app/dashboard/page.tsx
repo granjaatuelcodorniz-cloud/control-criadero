@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createClient } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import Header from '@/components/Header';
@@ -35,7 +35,7 @@ type StockItem = {
 export default function Dashboard() {
   const { user, profile, loading: authLoading } = useAuth();
   const router = useRouter();
-  const supabase = createClient();
+  const supabase = useRef(createClient()).current;
 
   const [dailyTasks, setDailyTasks] = useState<Task[]>([]);
   const [periodicTasks, setPeriodicTasks] = useState<Task[]>([]);
@@ -58,6 +58,34 @@ export default function Dashboard() {
 
   const today = new Date().toISOString().split('T')[0];
 
+  const loadData = async () => {
+    if (!user) return;
+    try {
+      const [tasksRes, completionsRes, lotsRes, stockRes] = await Promise.all([
+        supabase.from('tasks').select('id, description, type, frequency_days, is_urgent').eq('is_active', true).or(`assigned_to.is.null,assigned_to.eq.${user.id}`).order('type'),
+        supabase.from('task_completions').select('task_id').eq('user_id', user.id).eq('date', today),
+        supabase.from('lots').select('id, code, current_quantity').order('start_date', { ascending: false }),
+        supabase.from('stock_items').select('id, name, unit, current_quantity, is_feed, bolsas_restantes, kg_por_bolsa').order('name'),
+      ]);
+
+      if (tasksRes.data) {
+        setDailyTasks(tasksRes.data.filter(t => t.type === 'daily'));
+        setPeriodicTasks(tasksRes.data.filter(t => t.type === 'periodic'));
+        setCustomTasks(tasksRes.data.filter(t => t.type === 'custom'));
+      }
+      if (completionsRes.data) setCompletedIds(completionsRes.data.map(c => c.task_id));
+      if (lotsRes.data) {
+        setLots(lotsRes.data);
+        if (lotsRes.data.length > 0) setSelectedLot(String(lotsRes.data[0].id));
+      }
+      if (stockRes.data) setStockItems(stockRes.data);
+    } catch (error) {
+      console.error('Error cargando dashboard colaborador:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (authLoading) return;
     if (!user || !profile) { router.push('/'); return; }
@@ -65,58 +93,14 @@ export default function Dashboard() {
     loadData();
   }, [authLoading, user, profile]);
 
-  const loadData = async () => {
-    if (!user) return;
-
-    const { data: tasksData } = await supabase
-      .from('tasks')
-      .select('id, description, type, frequency_days, is_urgent')
-      .eq('is_active', true)
-      .or(`assigned_to.is.null,assigned_to.eq.${user.id}`)
-      .order('type');
-
-    if (tasksData) {
-      setDailyTasks(tasksData.filter(t => t.type === 'daily'));
-      setPeriodicTasks(tasksData.filter(t => t.type === 'periodic'));
-      setCustomTasks(tasksData.filter(t => t.type === 'custom'));
-    }
-
-    const { data: completions } = await supabase
-      .from('task_completions')
-      .select('task_id')
-      .eq('user_id', user.id)
-      .eq('date', today);
-    if (completions) setCompletedIds(completions.map(c => c.task_id));
-
-    const { data: lotsData } = await supabase
-      .from('lots')
-      .select('id, code, current_quantity')
-      .order('start_date', { ascending: false });
-    if (lotsData) {
-      setLots(lotsData);
-      if (lotsData.length > 0) setSelectedLot(String(lotsData[0].id));
-    }
-
-    const { data: stockData } = await supabase
-      .from('stock_items')
-      .select('id, name, unit, current_quantity, is_feed, bolsas_restantes, kg_por_bolsa')
-      .order('name');
-    if (stockData) setStockItems(stockData);
-
-    setLoading(false);
-  };
-
   const toggleTask = async (taskId: number) => {
     if (!user) return;
     const isDone = completedIds.includes(taskId);
     if (isDone) {
-      await supabase.from('task_completions').delete()
-        .eq('task_id', taskId).eq('user_id', user.id).eq('date', today);
+      await supabase.from('task_completions').delete().eq('task_id', taskId).eq('user_id', user.id).eq('date', today);
       setCompletedIds(prev => prev.filter(id => id !== taskId));
     } else {
-      await supabase.from('task_completions').insert({
-        task_id: taskId, user_id: user.id, completed: true, date: today,
-      });
+      await supabase.from('task_completions').insert({ task_id: taskId, user_id: user.id, completed: true, date: today });
       setCompletedIds(prev => [...prev, taskId]);
     }
   };
@@ -124,30 +108,29 @@ export default function Dashboard() {
   const handleSaveLoss = async () => {
     if (!selectedLot || !user) return;
     setSavingLoss(true);
-
-    await supabase.from('lot_losses').insert({
-      lot_id: Number(selectedLot), quantity: lossQty,
-      reason: lossReason.trim() || null, user_id: user.id, date: today,
-    });
-
-    await supabase.from('lots')
-      .update({ current_quantity: (lots.find(l => String(l.id) === selectedLot)?.current_quantity ?? 1) - lossQty })
-      .eq('id', Number(selectedLot));
-
-    setSavingLoss(false);
-    setLossSaved(true);
-    setLossQty(1);
-    setLossReason('');
-    setShowLossForm(false);
-    await loadData();
-    setTimeout(() => setLossSaved(false), 3000);
+    try {
+      await supabase.from('lot_losses').insert({
+        lot_id: Number(selectedLot), quantity: lossQty,
+        reason: lossReason.trim() || null, user_id: user.id, date: today,
+      });
+      await supabase.from('lots')
+        .update({ current_quantity: (lots.find(l => String(l.id) === selectedLot)?.current_quantity ?? 1) - lossQty })
+        .eq('id', Number(selectedLot));
+      setLossQty(1);
+      setLossReason('');
+      setShowLossForm(false);
+      setLossSaved(true);
+      setTimeout(() => setLossSaved(false), 3000);
+      await loadData();
+    } finally {
+      setSavingLoss(false);
+    }
   };
 
   const handleAddExtraTask = async () => {
     if (!extraTaskDesc.trim() || !user) return;
     await supabase.from('tasks').insert({
-      description: extraTaskDesc.trim(),
-      type: 'custom', is_active: true,
+      description: extraTaskDesc.trim(), type: 'custom', is_active: true,
       created_by: user.id, assigned_to: user.id,
     });
     setExtraTaskDesc('');
@@ -159,47 +142,42 @@ export default function Dashboard() {
     if (!feedItem?.kg_por_bolsa || !feedItem?.bolsas_restantes || !user) return;
     setSavingStock(true);
     setConfirmStock(null);
-
-    await supabase.from('stock_items').update({
-      current_quantity: Math.max(0, feedItem.current_quantity - feedItem.kg_por_bolsa),
-      bolsas_restantes: Math.max(0, feedItem.bolsas_restantes - 1),
-    }).eq('id', feedItem.id);
-
-    await supabase.from('stock_movements').insert({
-      stock_item_id: feedItem.id,
-      quantity: feedItem.kg_por_bolsa,
-      movement_type: 'salida',
-      notes: 'Bolsa abierta',
-      user_id: user.id, date: today,
-    });
-
-    setSavingStock(false);
-    setStockSaved(true);
-    setTimeout(() => setStockSaved(false), 3000);
-    await loadData();
+    try {
+      await Promise.all([
+        supabase.from('stock_items').update({
+          current_quantity: Math.max(0, feedItem.current_quantity - feedItem.kg_por_bolsa),
+          bolsas_restantes: Math.max(0, feedItem.bolsas_restantes - 1),
+        }).eq('id', feedItem.id),
+        supabase.from('stock_movements').insert({
+          stock_item_id: feedItem.id, quantity: feedItem.kg_por_bolsa,
+          movement_type: 'salida', notes: 'Bolsa abierta', user_id: user.id, date: today,
+        }),
+      ]);
+      setStockSaved(true);
+      setTimeout(() => setStockSaved(false), 3000);
+      await loadData();
+    } finally {
+      setSavingStock(false);
+    }
   };
 
   const handleUseItem = async (item: StockItem) => {
     if (!user) return;
     setSavingStock(true);
     setConfirmStock(null);
-
-    await supabase.from('stock_movements').insert({
-      stock_item_id: item.id,
-      quantity: 1,
-      movement_type: 'salida',
-      user_id: user.id,
-      date: today,
-    });
-
-    await supabase.from('stock_items')
-      .update({ current_quantity: Math.max(0, item.current_quantity - 1) })
-      .eq('id', item.id);
-
-    setSavingStock(false);
-    setStockSaved(true);
-    setTimeout(() => setStockSaved(false), 3000);
-    await loadData();
+    try {
+      await Promise.all([
+        supabase.from('stock_movements').insert({
+          stock_item_id: item.id, quantity: 1, movement_type: 'salida', user_id: user.id, date: today,
+        }),
+        supabase.from('stock_items').update({ current_quantity: Math.max(0, item.current_quantity - 1) }).eq('id', item.id),
+      ]);
+      setStockSaved(true);
+      setTimeout(() => setStockSaved(false), 3000);
+      await loadData();
+    } finally {
+      setSavingStock(false);
+    }
   };
 
   if (authLoading || loading) return (
@@ -218,26 +196,16 @@ export default function Dashboard() {
   const TaskItem = ({ task }: { task: Task }) => {
     const isDone = completedIds.includes(task.id);
     return (
-      <div
-        onClick={() => toggleTask(task.id)}
+      <div onClick={() => toggleTask(task.id)}
         className={`flex items-center gap-4 p-4 rounded-2xl border cursor-pointer transition-all active:scale-[0.99]
-          ${isDone ? 'bg-gray-50 border-gray-100' : 'bg-white border-gray-200 hover:border-yellow-300'}`}
-      >
+          ${isDone ? 'bg-gray-50 border-gray-100' : 'bg-white border-gray-200 hover:border-yellow-300'}`}>
         <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition-all
           ${isDone ? 'bg-yellow-400 border-yellow-400' : 'border-gray-300'}`}>
-          {isDone && (
-            <svg viewBox="0 0 12 12" className="w-3 h-3">
-              <polyline points="2,6 5,9 10,3" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" />
-            </svg>
-          )}
+          {isDone && <svg viewBox="0 0 12 12" className="w-3 h-3"><polyline points="2,6 5,9 10,3" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" /></svg>}
         </div>
         <div className="flex-1">
-          <span className={`text-base ${isDone ? 'line-through text-gray-400' : 'text-gray-800'}`}>
-            {task.description}
-          </span>
-          {task.frequency_days && (
-            <p className="text-xs text-gray-400 mt-0.5">Cada {task.frequency_days} días</p>
-          )}
+          <span className={`text-base ${isDone ? 'line-through text-gray-400' : 'text-gray-800'}`}>{task.description}</span>
+          {task.frequency_days && <p className="text-xs text-gray-400 mt-0.5">Cada {task.frequency_days} días</p>}
         </div>
         {task.is_urgent && !isDone && <span className="badge-urgent">Urgente</span>}
       </div>
@@ -261,17 +229,14 @@ export default function Dashboard() {
               <span className="font-medium">{doneTasks}/{totalTasks} tareas</span>
             </div>
             <div className="w-full bg-gray-100 rounded-full h-2">
-              <div
-                className="bg-yellow-400 h-2 rounded-full transition-all"
-                style={{ width: totalTasks > 0 ? `${Math.round((doneTasks / totalTasks) * 100)}%` : '0%' }}
-              />
+              <div className="bg-yellow-400 h-2 rounded-full transition-all"
+                style={{ width: totalTasks > 0 ? `${Math.round((doneTasks / totalTasks) * 100)}%` : '0%' }} />
             </div>
           </div>
         </div>
 
         <Link href="/dashboard/huevos" className="btn-primary w-full py-4 text-base rounded-2xl">
-          <Egg className="w-5 h-5" />
-          Registrar huevos del día
+          <Egg className="w-5 h-5" /> Registrar huevos del día
         </Link>
 
         {dailyTasks.length > 0 && (
@@ -280,9 +245,7 @@ export default function Dashboard() {
               <CheckSquare className="w-4 h-4 text-yellow-500" />
               <h3 className="font-semibold text-gray-700 text-sm uppercase tracking-wide">Tareas diarias</h3>
             </div>
-            <div className="space-y-2">
-              {dailyTasks.map(t => <TaskItem key={t.id} task={t} />)}
-            </div>
+            <div className="space-y-2">{dailyTasks.map(t => <TaskItem key={t.id} task={t} />)}</div>
           </div>
         )}
 
@@ -292,9 +255,7 @@ export default function Dashboard() {
               <AlertTriangle className="w-4 h-4 text-orange-400" />
               <h3 className="font-semibold text-gray-700 text-sm uppercase tracking-wide">Tareas periódicas</h3>
             </div>
-            <div className="space-y-2">
-              {periodicTasks.map(t => <TaskItem key={t.id} task={t} />)}
-            </div>
+            <div className="space-y-2">{periodicTasks.map(t => <TaskItem key={t.id} task={t} />)}</div>
           </div>
         )}
 
@@ -304,34 +265,23 @@ export default function Dashboard() {
               <ClipboardList className="w-4 h-4 text-blue-400" />
               <h3 className="font-semibold text-gray-700 text-sm uppercase tracking-wide">Tareas asignadas</h3>
             </div>
-            <div className="space-y-2">
-              {customTasks.map(t => <TaskItem key={t.id} task={t} />)}
-            </div>
+            <div className="space-y-2">{customTasks.map(t => <TaskItem key={t.id} task={t} />)}</div>
           </div>
         )}
 
         <div>
           {!showExtraTask ? (
-            <button
-              onClick={() => setShowExtraTask(true)}
-              className="w-full py-3 rounded-2xl border-2 border-dashed border-gray-200 text-gray-400 hover:border-yellow-300 hover:text-yellow-500 transition-all flex items-center justify-center gap-2 text-sm"
-            >
+            <button onClick={() => setShowExtraTask(true)}
+              className="w-full py-3 rounded-2xl border-2 border-dashed border-gray-200 text-gray-400 hover:border-yellow-300 hover:text-yellow-500 transition-all flex items-center justify-center gap-2 text-sm">
               <Plus className="w-4 h-4" /> Agregar tarea extra
             </button>
           ) : (
             <div className="bg-white rounded-2xl border border-gray-200 p-4 space-y-3">
-              <input
-                className="input-base"
-                placeholder="Descripción de la tarea..."
-                value={extraTaskDesc}
-                onChange={e => setExtraTaskDesc(e.target.value)}
-                autoFocus
-              />
+              <input className="input-base" placeholder="Descripción de la tarea..."
+                value={extraTaskDesc} onChange={e => setExtraTaskDesc(e.target.value)} autoFocus />
               <div className="flex gap-2">
                 <button onClick={handleAddExtraTask} className="btn-primary flex-1 py-2 text-sm">Agregar</button>
-                <button onClick={() => setShowExtraTask(false)} className="btn-secondary px-3 py-2">
-                  <X className="w-4 h-4" />
-                </button>
+                <button onClick={() => setShowExtraTask(false)} className="btn-secondary px-3 py-2"><X className="w-4 h-4" /></button>
               </div>
             </div>
           )}
@@ -344,19 +294,15 @@ export default function Dashboard() {
             {lossSaved && <span className="text-green-600 text-xs font-medium">✓ Guardado</span>}
           </div>
           {!showLossForm ? (
-            <button onClick={() => setShowLossForm(true)}
-              className="btn-secondary w-full py-3 text-sm rounded-2xl">
+            <button onClick={() => setShowLossForm(true)} className="btn-secondary w-full py-3 text-sm rounded-2xl">
               Registrar baja de ave
             </button>
           ) : (
             <div className="bg-white rounded-2xl border border-gray-200 p-4 space-y-4">
               <div>
                 <label className="text-sm text-gray-600 mb-1 block">Lote</label>
-                <select className="input-base" value={selectedLot}
-                  onChange={e => setSelectedLot(e.target.value)}>
-                  {lots.map(l => (
-                    <option key={l.id} value={l.id}>{l.code} — {l.current_quantity} aves</option>
-                  ))}
+                <select className="input-base" value={selectedLot} onChange={e => setSelectedLot(e.target.value)}>
+                  {lots.map(l => <option key={l.id} value={l.id}>{l.code} — {l.current_quantity} aves</option>)}
                 </select>
               </div>
               <div>
@@ -370,13 +316,10 @@ export default function Dashboard() {
                   value={lossReason} onChange={e => setLossReason(e.target.value)} />
               </div>
               <div className="flex gap-2">
-                <button onClick={handleSaveLoss} disabled={savingLoss}
-                  className="btn-primary flex-1 py-3 text-sm">
+                <button onClick={handleSaveLoss} disabled={savingLoss} className="btn-primary flex-1 py-3 text-sm">
                   {savingLoss ? 'Guardando...' : 'Confirmar baja'}
                 </button>
-                <button onClick={() => setShowLossForm(false)} className="btn-secondary px-3">
-                  <X className="w-4 h-4" />
-                </button>
+                <button onClick={() => setShowLossForm(false)} className="btn-secondary px-3"><X className="w-4 h-4" /></button>
               </div>
             </div>
           )}
@@ -388,40 +331,29 @@ export default function Dashboard() {
             <h3 className="font-semibold text-gray-700 text-sm uppercase tracking-wide">Insumos</h3>
             {stockSaved && <span className="text-green-600 text-xs font-medium">✓ Guardado</span>}
           </div>
-
           <div className="space-y-2">
             {feedItems.map(feedItem => (
               <div key={feedItem.id} className="bg-white rounded-2xl border border-gray-200 p-4 flex items-center justify-between">
                 <div>
                   <p className="font-medium text-gray-800">{feedItem.name}</p>
                   <p className="text-xs text-gray-400">
-                    {feedItem.bolsas_restantes != null
-                      ? `${feedItem.bolsas_restantes} bolsas · ${feedItem.current_quantity} kg`
-                      : `${feedItem.current_quantity} kg`}
+                    {feedItem.bolsas_restantes != null ? `${feedItem.bolsas_restantes} bolsas · ${feedItem.current_quantity} kg` : `${feedItem.current_quantity} kg`}
                   </p>
                 </div>
                 {confirmStock === feedItem.id ? (
                   <div className="flex gap-2">
-                    <button onClick={() => handleOpenBolsa(feedItem)} disabled={savingStock}
-                      className="btn-primary px-4 py-2 text-sm">
+                    <button onClick={() => handleOpenBolsa(feedItem)} disabled={savingStock} className="btn-primary px-4 py-2 text-sm">
                       {savingStock ? '...' : 'Confirmar'}
                     </button>
-                    <button onClick={() => setConfirmStock(null)} className="btn-secondary px-3 py-2">
-                      <X className="w-4 h-4" />
-                    </button>
+                    <button onClick={() => setConfirmStock(null)} className="btn-secondary px-3 py-2"><X className="w-4 h-4" /></button>
                   </div>
                 ) : (
-                  <button
-                    onClick={() => setConfirmStock(feedItem.id)}
-                    disabled={!feedItem.bolsas_restantes}
-                    className="btn-primary px-4 py-2 text-sm"
-                  >
+                  <button onClick={() => setConfirmStock(feedItem.id)} disabled={!feedItem.bolsas_restantes} className="btn-primary px-4 py-2 text-sm">
                     Abrí una bolsa
                   </button>
                 )}
               </div>
             ))}
-
             {otherItems.map(item => (
               <div key={item.id} className="bg-white rounded-2xl border border-gray-200 p-4 flex items-center justify-between">
                 <div>
@@ -430,19 +362,13 @@ export default function Dashboard() {
                 </div>
                 {confirmStock === item.id ? (
                   <div className="flex gap-2">
-                    <button onClick={() => handleUseItem(item)} disabled={savingStock}
-                      className="btn-primary px-4 py-2 text-sm">
+                    <button onClick={() => handleUseItem(item)} disabled={savingStock} className="btn-primary px-4 py-2 text-sm">
                       {savingStock ? '...' : 'Confirmar'}
                     </button>
-                    <button onClick={() => setConfirmStock(null)} className="btn-secondary px-3 py-2">
-                      <X className="w-4 h-4" />
-                    </button>
+                    <button onClick={() => setConfirmStock(null)} className="btn-secondary px-3 py-2"><X className="w-4 h-4" /></button>
                   </div>
                 ) : (
-                  <button onClick={() => setConfirmStock(item.id)}
-                    className="btn-secondary px-4 py-2 text-sm">
-                    Usar
-                  </button>
+                  <button onClick={() => setConfirmStock(item.id)} className="btn-secondary px-4 py-2 text-sm">Usar</button>
                 )}
               </div>
             ))}

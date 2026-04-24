@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { createClient } from '@/lib/supabase';
 import Header from '@/components/Header';
 import { Plus, X, Trash2, Calendar, Clock, User, AlertCircle, CheckCircle2 } from 'lucide-react';
@@ -24,7 +24,7 @@ type Completion = { task_id: number; date: string };
 export default function Tareas() {
   const { user, profile, loading: authLoading } = useAuth();
   const router = useRouter();
-  const supabase = createClient();
+  const supabase = useRef(createClient()).current;
 
   const [tasks, setTasks] = useState<Task[]>([]);
   const [collaborators, setCollaborators] = useState<Collaborator[]>([]);

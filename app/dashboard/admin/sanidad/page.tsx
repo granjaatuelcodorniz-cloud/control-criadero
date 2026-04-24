@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { createClient } from '@/lib/supabase';
 import Header from '@/components/Header';
 import { Plus, X, Calendar, ClipboardList, Beaker } from 'lucide-react';
@@ -24,7 +24,7 @@ const TIPOS = ['Vitaminas', 'Antibiótico', 'Tratamiento', 'Limpieza profunda', 
 export default function Sanidad() {
   const { user, profile, loading: authLoading } = useAuth();
   const router = useRouter();
-  const supabase = createClient();
+  const supabase = useRef(createClient()).current;
 
   const [records, setRecords] = useState<HealthRecord[]>([]);
   const [lots, setLots] = useState<Lot[]>([]);

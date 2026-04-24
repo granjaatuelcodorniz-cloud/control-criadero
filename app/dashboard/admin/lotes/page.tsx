@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { createClient } from '@/lib/supabase';
 import Header from '@/components/Header';
 import { Plus, X, TrendingUp, Skull } from 'lucide-react';
@@ -27,7 +27,7 @@ type Loss = {
 export default function Lotes() {
   const { user, profile, loading: authLoading } = useAuth();
   const router = useRouter();
-  const supabase = createClient();
+  const supabase = useRef(createClient()).current;
 
   const [lots, setLots] = useState<Lot[]>([]);
   const [losses, setLosses] = useState<Loss[]>([]);
