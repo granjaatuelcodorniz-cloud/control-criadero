@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect } from 'react';
-import { createClient } from '@/lib/supabase';
+import { supabase } from '@/lib/supabase';
 import { useRouter } from 'next/navigation';
 
 export default function AppVisibilityHandler() {
@@ -9,27 +9,14 @@ export default function AppVisibilityHandler() {
 
   useEffect(() => {
     const handleVisibilityChange = async () => {
-      if (document.visibilityState !== 'visible') return
+      if (document.visibilityState !== 'visible') return;
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) router.replace('/');
+    };
 
-      try {
-        // createClient() fresco cada vez — nunca usar instancia cacheada
-        // getUser() valida contra el servidor, a diferencia de getSession()
-        const supabase = createClient()
-        const { data: { user }, error } = await supabase.auth.getUser()
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [router]);
 
-        if (error || !user) {
-          router.replace('/')
-        }
-      } catch (err) {
-        console.error('Error al verificar sesión al volver a la app:', err)
-      }
-    }
-
-    document.addEventListener('visibilitychange', handleVisibilityChange)
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange)
-    }
-  }, [router])
-
-  return null
+  return null;
 }

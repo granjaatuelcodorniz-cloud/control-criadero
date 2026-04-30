@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
-import { createClient } from '@/lib/supabase';
+import { useEffect, useState } from 'react';
+import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import Header from '@/components/Header';
 import Link from 'next/link';
@@ -35,7 +35,6 @@ type StockItem = {
 export default function Dashboard() {
   const { user, profile, loading: authLoading } = useAuth();
   const router = useRouter();
-  const supabase = useRef(createClient()).current;
 
   const [dailyTasks, setDailyTasks] = useState<Task[]>([]);
   const [periodicTasks, setPeriodicTasks] = useState<Task[]>([]);

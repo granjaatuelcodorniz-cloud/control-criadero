@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
-import { createClient } from '@/lib/supabase';
+import { useEffect, useState } from 'react';
+import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import { useRouter } from 'next/navigation';
 import Header from '@/components/Header';
@@ -34,7 +34,6 @@ type Alert = { type: 'danger' | 'warning' | 'ok'; message: string };
 export default function AdminDashboard() {
   const { user, profile, loading: authLoading } = useAuth();
   const router = useRouter();
-  const supabase = useRef(createClient()).current;
 
   const [todayRecord, setTodayRecord] = useState<DailyRecord | null>(null);
   const [todayFertile, setTodayFertile] = useState<FertileRecord | null>(null);

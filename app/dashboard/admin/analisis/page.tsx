@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
-import { createClient } from '@/lib/supabase';
+import { useEffect, useState } from 'react';
+import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import { useRouter } from 'next/navigation';
 import Header from '@/components/Header';
@@ -34,7 +34,6 @@ type RangeRecord = {
 export default function Analisis() {
   const { user, profile, loading: authLoading } = useAuth();
   const router = useRouter();
-  const supabase = useRef(createClient()).current;
 
   const [searchDate, setSearchDate] = useState(new Date().toISOString().split('T')[0]);
   const [dayRecord, setDayRecord] = useState<DailyRecord | null>(null);

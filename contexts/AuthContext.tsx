@@ -1,7 +1,7 @@
 'use client';
 
 import { createContext, useContext, useEffect, useState } from 'react';
-import { createClient } from '@/lib/supabase';
+import { supabase } from '@/lib/supabase';
 import { User } from '@supabase/supabase-js';
 
 type Profile = {
@@ -27,7 +27,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
-  const supabase = createClient();
 
   const fetchProfile = async (userId: string) => {
     try {
@@ -37,14 +36,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         .eq('id', userId)
         .single();
       if (data) setProfile(data);
-    } catch {}
+    } catch (error) {
+      console.error('Error cargando perfil:', error);
+    }
   };
 
   useEffect(() => {
     let mounted = true;
 
-    // onAuthStateChange es el método más confiable — Supabase lo dispara
-    // inmediatamente con el estado actual de la sesión al montar
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         if (!mounted) return;
@@ -58,7 +57,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
         if (session?.user) {
           setUser(session.user);
-          if (!profile) await fetchProfile(session.user.id);
+          await fetchProfile(session.user.id);
         } else {
           setUser(null);
           setProfile(null);

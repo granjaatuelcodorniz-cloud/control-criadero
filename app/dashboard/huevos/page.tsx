@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
-import { createClient } from '@/lib/supabase';
+import { useState, useEffect } from 'react';
+import { supabase } from '@/lib/supabase';
 import Header from '@/components/Header';
 import { ChevronDown } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
@@ -97,7 +97,6 @@ function DatePicker({ value, onChange }: { value: string; onChange: (v: string) 
 export default function RegistroHuevos() {
   const { user, profile, loading: authLoading } = useAuth();
   const router = useRouter();
-  const supabase = useRef(createClient()).current;
 
   const [activeTab, setActiveTab] = useState<'consumo' | 'fertiles'>('consumo');
 
