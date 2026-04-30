@@ -1,22 +1,21 @@
 'use client';
 
 import { useEffect } from 'react';
-import { supabase } from '@/lib/supabase';
-import { useRouter } from 'next/navigation';
 
 export default function AppVisibilityHandler() {
-  const router = useRouter();
-
   useEffect(() => {
-    const handleVisibilityChange = async () => {
-      if (document.visibilityState !== 'visible') return;
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) router.replace('/');
+    // pageshow con persisted:true = navegador restauró la página del bfcache
+    // En ese caso forzamos recarga completa para que React y Supabase
+    // vuelvan a inicializarse correctamente
+    const handlePageShow = (e: PageTransitionEvent) => {
+      if (e.persisted) {
+        window.location.reload();
+      }
     };
 
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, [router]);
+    window.addEventListener('pageshow', handlePageShow);
+    return () => window.removeEventListener('pageshow', handlePageShow);
+  }, []);
 
   return null;
 }
