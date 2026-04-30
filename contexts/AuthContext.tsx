@@ -46,34 +46,47 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const init = async () => {
       try {
-        // getUser() verifica la sesión inmediatamente contra el servidor,
-        // sin esperar que onAuthStateChange decida disparar.
-        const { data: { user: currentUser } } = await supabase.auth.getUser();
+        // PASO 1: getSession() lee la sesión guardada en la cookie/storage
+        // de forma INSTANTÁNEA sin llamada de red. Muestra la app de inmediato.
+        const { data: { session } } = await supabase.auth.getSession();
+
         if (!mounted) return;
 
-        if (currentUser) {
-          setUser(currentUser);
-          await fetchProfile(currentUser.id);
+        if (session?.user) {
+          setUser(session.user);
+          await fetchProfile(session.user.id);
+          setLoading(false);
+
+          // PASO 2: getUser() valida el token contra el servidor en segundo plano.
+          // Si el token expiró y no se puede renovar, redirige al login.
+          // Esto ocurre silenciosamente sin bloquear la UI.
+          const { data: { user: validatedUser } } = await supabase.auth.getUser();
+          if (!mounted) return;
+          if (!validatedUser) {
+            setUser(null);
+            setProfile(null);
+            window.location.href = '/';
+          }
         } else {
+          // Sin sesión local — no hay nada que mostrar
           setUser(null);
           setProfile(null);
+          setLoading(false);
         }
       } catch (error) {
-        console.error('Error verificando sesión:', error);
+        console.error('Error iniciando sesión:', error);
         if (mounted) {
           setUser(null);
           setProfile(null);
+          setLoading(false);
         }
-      } finally {
-        if (mounted) setLoading(false);
       }
     };
 
-    // Iniciamos verificación inmediata
     init();
 
     // onAuthStateChange maneja cambios posteriores:
-    // login, logout, renovación de token en segundo plano
+    // login, logout y renovación automática de token
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         if (!mounted) return;
@@ -84,10 +97,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           return;
         }
 
-        if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+        if (event === 'SIGNED_IN') {
           if (session?.user) {
             setUser(session.user);
             await fetchProfile(session.user.id);
+            setLoading(false);
+          }
+        }
+
+        if (event === 'TOKEN_REFRESHED') {
+          if (session?.user) {
+            setUser(session.user);
           }
         }
       }
