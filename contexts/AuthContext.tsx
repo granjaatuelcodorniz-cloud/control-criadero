@@ -44,14 +44,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let mounted = true;
 
-    // Si después de 5 segundos sigue en loading, forzamos verificación directa.
-    // Esto cubre el caso donde onAuthStateChange tarda en disparar
-    // por renovación lenta del token JWT.
-    const timeout = setTimeout(async () => {
-      if (!mounted) return;
+    const init = async () => {
       try {
+        // getUser() verifica la sesión inmediatamente contra el servidor,
+        // sin esperar que onAuthStateChange decida disparar.
         const { data: { user: currentUser } } = await supabase.auth.getUser();
         if (!mounted) return;
+
         if (currentUser) {
           setUser(currentUser);
           await fetchProfile(currentUser.id);
@@ -59,43 +58,43 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setUser(null);
           setProfile(null);
         }
-      } catch {
-        setUser(null);
-        setProfile(null);
+      } catch (error) {
+        console.error('Error verificando sesión:', error);
+        if (mounted) {
+          setUser(null);
+          setProfile(null);
+        }
       } finally {
         if (mounted) setLoading(false);
       }
-    }, 5000);
+    };
 
+    // Iniciamos verificación inmediata
+    init();
+
+    // onAuthStateChange maneja cambios posteriores:
+    // login, logout, renovación de token en segundo plano
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         if (!mounted) return;
 
-        // Si onAuthStateChange dispara antes del timeout, lo cancelamos
-        clearTimeout(timeout);
-
         if (event === 'SIGNED_OUT') {
           setUser(null);
           setProfile(null);
-          setLoading(false);
           return;
         }
 
-        if (session?.user) {
-          setUser(session.user);
-          await fetchProfile(session.user.id);
-        } else {
-          setUser(null);
-          setProfile(null);
+        if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+          if (session?.user) {
+            setUser(session.user);
+            await fetchProfile(session.user.id);
+          }
         }
-
-        setLoading(false);
       }
     );
 
     return () => {
       mounted = false;
-      clearTimeout(timeout);
       subscription.unsubscribe();
     };
   }, []);
