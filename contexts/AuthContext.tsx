@@ -44,9 +44,35 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let mounted = true;
 
+    // Si después de 5 segundos sigue en loading, forzamos verificación directa.
+    // Esto cubre el caso donde onAuthStateChange tarda en disparar
+    // por renovación lenta del token JWT.
+    const timeout = setTimeout(async () => {
+      if (!mounted) return;
+      try {
+        const { data: { user: currentUser } } = await supabase.auth.getUser();
+        if (!mounted) return;
+        if (currentUser) {
+          setUser(currentUser);
+          await fetchProfile(currentUser.id);
+        } else {
+          setUser(null);
+          setProfile(null);
+        }
+      } catch {
+        setUser(null);
+        setProfile(null);
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    }, 5000);
+
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         if (!mounted) return;
+
+        // Si onAuthStateChange dispara antes del timeout, lo cancelamos
+        clearTimeout(timeout);
 
         if (event === 'SIGNED_OUT') {
           setUser(null);
@@ -69,6 +95,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     return () => {
       mounted = false;
+      clearTimeout(timeout);
       subscription.unsubscribe();
     };
   }, []);
