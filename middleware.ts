@@ -13,13 +13,10 @@ export async function middleware(request: NextRequest) {
           return request.cookies.getAll()
         },
         setAll(cookiesToSet) {
-          // Escribir cookies en la request para que el servidor las vea
           cookiesToSet.forEach(({ name, value }) =>
             request.cookies.set(name, value)
           )
-          // Recrear la response con la request actualizada
           supabaseResponse = NextResponse.next({ request })
-          // Escribir cookies en la response para que el browser las persista
           cookiesToSet.forEach(({ name, value, options }) =>
             supabaseResponse.cookies.set(name, value, options)
           )
@@ -28,7 +25,6 @@ export async function middleware(request: NextRequest) {
     }
   )
 
-  // getUser() valida la sesión contra el servidor (no solo la cookie local)
   const { data: { user } } = await supabase.auth.getUser()
 
   // Sin sesión intentando acceder al dashboard → login
@@ -49,6 +45,15 @@ export async function middleware(request: NextRequest) {
       : '/dashboard'
 
     return NextResponse.redirect(new URL(redirectUrl, request.url))
+  }
+
+  // Desactivar caché en rutas autenticadas.
+  // Esto evita que el navegador congele la página (bfcache) y sirva
+  // una versión desactualizada con el estado de React congelado.
+  if (request.nextUrl.pathname.startsWith('/dashboard')) {
+    supabaseResponse.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
+    supabaseResponse.headers.set('Pragma', 'no-cache')
+    supabaseResponse.headers.set('Expires', '0')
   }
 
   return supabaseResponse
