@@ -1,7 +1,7 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
-export async function middleware(request: NextRequest) {
+export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request })
 
   const supabase = createServerClient(
@@ -25,14 +25,16 @@ export async function middleware(request: NextRequest) {
     }
   )
 
+  // IMPORTANTE: no agregar código entre createServerClient y getUser()
+  // getUser() refresca el token si está por vencer — es el núcleo del proxy
   const { data: { user } } = await supabase.auth.getUser()
 
-  // Sin sesión intentando acceder al dashboard → login
+  // Sin sesión intentando acceder al dashboard → redirigir al login
   if (!user && request.nextUrl.pathname.startsWith('/dashboard')) {
     return NextResponse.redirect(new URL('/', request.url))
   }
 
-  // Con sesión en la página de login → redirigir según rol
+  // Con sesión en el login → redirigir al dashboard correcto según rol
   if (user && request.nextUrl.pathname === '/') {
     const { data: profile } = await supabase
       .from('profiles')
@@ -47,20 +49,16 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(new URL(redirectUrl, request.url))
   }
 
-  // Desactivar caché en rutas autenticadas.
-  // Esto evita que el navegador congele la página (bfcache) y sirva
-  // una versión desactualizada con el estado de React congelado.
+  // Deshabilitar caché en rutas autenticadas para evitar
+  // que el navegador sirva páginas congeladas con estado desactualizado
   if (request.nextUrl.pathname.startsWith('/dashboard')) {
-    supabaseResponse.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
+    supabaseResponse.headers.set(
+      'Cache-Control',
+      'no-store, no-cache, must-revalidate, max-age=0'
+    )
     supabaseResponse.headers.set('Pragma', 'no-cache')
     supabaseResponse.headers.set('Expires', '0')
   }
 
   return supabaseResponse
-}
-
-export const config = {
-  matcher: [
-    '/((?!_next/static|_next/image|favicon.ico|logo.webp|manifest.json|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
-  ],
 }
