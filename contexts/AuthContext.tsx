@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import { createContext, useContext, useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { User } from '@supabase/supabase-js';
 
@@ -28,8 +28,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Función para cargar el perfil del usuario
-  const fetchProfile = useCallback(async (userId: string) => {
+  const fetchProfile = async (userId: string) => {
     try {
       const { data } = await supabase
         .from('profiles')
@@ -40,64 +39,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch (error) {
       console.error('Error cargando perfil:', error);
     }
-  }, []);
+  };
 
   useEffect(() => {
     let mounted = true;
 
-    const init = async () => {
-      try {
-        // PASO 1: getSession() es casi instantáneo (lee cookies/storage)
-        const { data: { session } } = await supabase.auth.getSession();
-
-        if (!mounted) return;
-
-        if (session?.user) {
-          setUser(session.user);
-          await fetchProfile(session.user.id);
-          if (mounted) setLoading(false);
-
-          // PASO 2: Verificación de seguridad en segundo plano
-          const { data: { user: validatedUser } } = await supabase.auth.getUser();
-          if (!mounted) return;
-          
-          if (!validatedUser) {
-            setUser(null);
-            setProfile(null);
-            window.location.href = '/';
-          }
-        } else {
-          setUser(null);
-          setProfile(null);
-          if (mounted) setLoading(false);
-        }
-      } catch (error) {
-        console.error('Error iniciando sesión:', error);
-        if (mounted) {
-          setUser(null);
-          setProfile(null);
-          setLoading(false);
-        }
-      }
-    };
-
-    init();
-
-    // --- FIX PARA DESPERTAR LA APP ---
-    // Esta función se ejecuta cuando el usuario vuelve a la pestaña
-    const handleWakeUp = () => {
-      if (mounted) {
-        // Re-validamos la sesión para romper cualquier estado "congelado"
-        init();
-      }
-    };
-
-    window.addEventListener('focus', handleWakeUp);
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') handleWakeUp();
-    });
-
-    // Suscripción a cambios de estado de Supabase
+    // onAuthStateChange es la ÚNICA fuente de verdad.
+    // Supabase lo dispara inmediatamente con el estado actual al montar,
+    // y maneja internamente la renovación del token sin conflictos de lock.
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         if (!mounted) return;
@@ -109,23 +58,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           return;
         }
 
-        if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
-          if (session?.user) {
-            setUser(session.user);
-            await fetchProfile(session.user.id);
-            setLoading(false);
-          }
+        if (session?.user) {
+          setUser(session.user);
+          await fetchProfile(session.user.id);
+        } else {
+          setUser(null);
+          setProfile(null);
         }
+
+        setLoading(false);
       }
     );
 
     return () => {
       mounted = false;
       subscription.unsubscribe();
-      window.removeEventListener('focus', handleWakeUp);
-      document.removeEventListener('visibilitychange', handleWakeUp);
     };
-  }, [fetchProfile]);
+  }, []);
 
   const signOut = async () => {
     setUser(null);
