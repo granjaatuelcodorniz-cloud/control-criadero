@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import { User } from '@supabase/supabase-js';
 
@@ -28,7 +28,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const fetchProfile = async (userId: string) => {
+  // Función para cargar el perfil del usuario
+  const fetchProfile = useCallback(async (userId: string) => {
     try {
       const { data } = await supabase
         .from('profiles')
@@ -39,15 +40,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch (error) {
       console.error('Error cargando perfil:', error);
     }
-  };
+  }, []);
 
   useEffect(() => {
     let mounted = true;
 
     const init = async () => {
       try {
-        // PASO 1: getSession() lee la sesión guardada en la cookie/storage
-        // de forma INSTANTÁNEA sin llamada de red. Muestra la app de inmediato.
+        // PASO 1: getSession() es casi instantáneo (lee cookies/storage)
         const { data: { session } } = await supabase.auth.getSession();
 
         if (!mounted) return;
@@ -55,23 +55,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (session?.user) {
           setUser(session.user);
           await fetchProfile(session.user.id);
-          setLoading(false);
+          if (mounted) setLoading(false);
 
-          // PASO 2: getUser() valida el token contra el servidor en segundo plano.
-          // Si el token expiró y no se puede renovar, redirige al login.
-          // Esto ocurre silenciosamente sin bloquear la UI.
+          // PASO 2: Verificación de seguridad en segundo plano
           const { data: { user: validatedUser } } = await supabase.auth.getUser();
           if (!mounted) return;
+          
           if (!validatedUser) {
             setUser(null);
             setProfile(null);
             window.location.href = '/';
           }
         } else {
-          // Sin sesión local — no hay nada que mostrar
           setUser(null);
           setProfile(null);
-          setLoading(false);
+          if (mounted) setLoading(false);
         }
       } catch (error) {
         console.error('Error iniciando sesión:', error);
@@ -85,8 +83,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     init();
 
-    // onAuthStateChange maneja cambios posteriores:
-    // login, logout y renovación automática de token
+    // --- FIX PARA DESPERTAR LA APP ---
+    // Esta función se ejecuta cuando el usuario vuelve a la pestaña
+    const handleWakeUp = () => {
+      if (mounted) {
+        // Re-validamos la sesión para romper cualquier estado "congelado"
+        init();
+      }
+    };
+
+    window.addEventListener('focus', handleWakeUp);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') handleWakeUp();
+    });
+
+    // Suscripción a cambios de estado de Supabase
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         if (!mounted) return;
@@ -94,20 +105,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (event === 'SIGNED_OUT') {
           setUser(null);
           setProfile(null);
+          setLoading(false);
           return;
         }
 
-        if (event === 'SIGNED_IN') {
+        if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
           if (session?.user) {
             setUser(session.user);
             await fetchProfile(session.user.id);
             setLoading(false);
-          }
-        }
-
-        if (event === 'TOKEN_REFRESHED') {
-          if (session?.user) {
-            setUser(session.user);
           }
         }
       }
@@ -116,8 +122,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => {
       mounted = false;
       subscription.unsubscribe();
+      window.removeEventListener('focus', handleWakeUp);
+      document.removeEventListener('visibilitychange', handleWakeUp);
     };
-  }, []);
+  }, [fetchProfile]);
 
   const signOut = async () => {
     setUser(null);
