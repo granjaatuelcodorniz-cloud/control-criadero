@@ -46,6 +46,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const init = async () => {
       const { data: { session } } = await supabase.auth.getSession();
+      console.log('SESSION:', session); // agregar esta línea
+      console.log('USER:', session?.user?.email); // y esta
 
       if (!mounted) return;
 
