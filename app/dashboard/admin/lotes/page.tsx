@@ -1,7 +1,5 @@
 'use client';
 
-export const dynamic = 'force-dynamic';
-
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import Header from '@/components/Header';
@@ -69,8 +67,7 @@ export default function Lotes() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!user) { router.push('/'); return; }
-    if (!profile) return;
+    if (!user || !profile) { router.push('/'); return; }
     if (profile.role !== 'owner') { router.push('/dashboard'); return; }
     loadData();
   }, [authLoading, user, profile]);

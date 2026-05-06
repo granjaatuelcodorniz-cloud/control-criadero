@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { AuthProvider } from "@/contexts/AuthContext";
+import AppVisibilityHandler from "@/components/AppVisibilityHandler";
 
 export const metadata: Metadata = {
   title: "ControlCriadero - Granja Atuel",
@@ -30,6 +31,7 @@ export default function RootLayout({
     <html lang="es">
       <body className="bg-gray-50">
         <AuthProvider>
+          <AppVisibilityHandler />
           {children}
         </AuthProvider>
       </body>

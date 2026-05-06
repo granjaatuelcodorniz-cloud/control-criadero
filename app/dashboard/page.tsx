@@ -1,7 +1,5 @@
 'use client';
 
-export const dynamic = 'force-dynamic';
-
 import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
@@ -89,8 +87,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!user) { router.push('/'); return; }
-    if (!profile) return;
+    if (!user || !profile) { router.push('/'); return; }
     if (profile.role === 'owner') { router.push('/dashboard/admin'); return; }
     loadData();
   }, [authLoading, user, profile]);

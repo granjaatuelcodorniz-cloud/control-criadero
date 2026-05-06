@@ -45,25 +45,48 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     let mounted = true;
 
     const init = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      console.log('SESSION:', session); // agregar esta línea
-      console.log('USER:', session?.user?.email); // y esta
+      try {
+        // PASO 1: getSession() lee la sesión guardada en la cookie/storage
+        // de forma INSTANTÁNEA sin llamada de red. Muestra la app de inmediato.
+        const { data: { session } } = await supabase.auth.getSession();
 
-      if (!mounted) return;
+        if (!mounted) return;
 
-      if (session?.user) {
-        setUser(session.user);
-        await fetchProfile(session.user.id);
-      } else {
-        setUser(null);
-        setProfile(null);
+        if (session?.user) {
+          setUser(session.user);
+          await fetchProfile(session.user.id);
+          setLoading(false);
+
+          // PASO 2: getUser() valida el token contra el servidor en segundo plano.
+          // Si el token expiró y no se puede renovar, redirige al login.
+          // Esto ocurre silenciosamente sin bloquear la UI.
+          const { data: { user: validatedUser } } = await supabase.auth.getUser();
+          if (!mounted) return;
+          if (!validatedUser) {
+            setUser(null);
+            setProfile(null);
+            window.location.href = '/';
+          }
+        } else {
+          // Sin sesión local — no hay nada que mostrar
+          setUser(null);
+          setProfile(null);
+          setLoading(false);
+        }
+      } catch (error) {
+        console.error('Error iniciando sesión:', error);
+        if (mounted) {
+          setUser(null);
+          setProfile(null);
+          setLoading(false);
+        }
       }
-
-      if (mounted) setLoading(false);
     };
 
     init();
 
+    // onAuthStateChange maneja cambios posteriores:
+    // login, logout y renovación automática de token
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         if (!mounted) return;
@@ -71,7 +94,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (event === 'SIGNED_OUT') {
           setUser(null);
           setProfile(null);
-          setLoading(false);
           return;
         }
 
