@@ -45,10 +45,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     let mounted = true;
 
     const init = async () => {
-      // getSession() lee la cookie local SIN adquirir ningún lock.
-      // Es instantáneo y nunca se bloquea, a diferencia de getUser()
-      // o onAuthStateChange que internamente intentan renovar el token
-      // y pueden quedar esperando un lock de 5 segundos.
       const { data: { session } } = await supabase.auth.getSession();
 
       if (!mounted) return;
@@ -61,15 +57,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setProfile(null);
       }
 
-      // loading=false SIEMPRE después de getSession(), sin importar
-      // si hay sesión o no. Nunca más pantalla de carga infinita.
-      setLoading(false);
+      if (mounted) setLoading(false);
     };
 
     init();
 
-    // onAuthStateChange escucha cambios posteriores:
-    // login, logout, renovación de token en background
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         if (!mounted) return;
@@ -77,6 +69,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (event === 'SIGNED_OUT') {
           setUser(null);
           setProfile(null);
+          setLoading(false);
           return;
         }
 

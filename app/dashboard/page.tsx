@@ -89,7 +89,8 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!user || !profile) { router.push('/'); return; }
+    if (!user) { router.push('/'); return; }
+    if (!profile) return;
     if (profile.role === 'owner') { router.push('/dashboard/admin'); return; }
     loadData();
   }, [authLoading, user, profile]);
