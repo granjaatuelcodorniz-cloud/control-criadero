@@ -44,9 +44,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let mounted = true;
 
-    // onAuthStateChange es la ÚNICA fuente de verdad.
-    // Supabase lo dispara inmediatamente con el estado actual al montar,
-    // y maneja internamente la renovación del token sin conflictos de lock.
+    const init = async () => {
+      // getSession() lee la cookie local SIN adquirir ningún lock.
+      // Es instantáneo y nunca se bloquea, a diferencia de getUser()
+      // o onAuthStateChange que internamente intentan renovar el token
+      // y pueden quedar esperando un lock de 5 segundos.
+      const { data: { session } } = await supabase.auth.getSession();
+
+      if (!mounted) return;
+
+      if (session?.user) {
+        setUser(session.user);
+        await fetchProfile(session.user.id);
+      } else {
+        setUser(null);
+        setProfile(null);
+      }
+
+      // loading=false SIEMPRE después de getSession(), sin importar
+      // si hay sesión o no. Nunca más pantalla de carga infinita.
+      setLoading(false);
+    };
+
+    init();
+
+    // onAuthStateChange escucha cambios posteriores:
+    // login, logout, renovación de token en background
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         if (!mounted) return;
@@ -54,19 +77,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (event === 'SIGNED_OUT') {
           setUser(null);
           setProfile(null);
-          setLoading(false);
           return;
         }
 
-        if (session?.user) {
-          setUser(session.user);
-          await fetchProfile(session.user.id);
-        } else {
-          setUser(null);
-          setProfile(null);
+        if (event === 'SIGNED_IN') {
+          if (session?.user) {
+            setUser(session.user);
+            await fetchProfile(session.user.id);
+            setLoading(false);
+          }
         }
 
-        setLoading(false);
+        if (event === 'TOKEN_REFRESHED') {
+          if (session?.user) {
+            setUser(session.user);
+          }
+        }
       }
     );
 
