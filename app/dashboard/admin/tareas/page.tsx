@@ -42,7 +42,6 @@ export default function Tareas() {
   const today = new Date().toISOString().split('T')[0];
 
   const loadData = useCallback(async () => {
-    setLoading(true);
     try {
       const [tasksRes, collabRes, compRes] = await Promise.all([
         supabase.from('tasks').select('*').eq('is_active', true).order('type').order('id'),

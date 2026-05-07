@@ -42,7 +42,6 @@ export default function Lotes() {
 
   const loadData = useCallback(async () => {
     try {
-      setLoading(true);
       const sevenDaysAgo = new Date();
       sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
 

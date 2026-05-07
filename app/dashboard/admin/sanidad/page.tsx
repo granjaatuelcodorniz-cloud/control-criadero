@@ -40,7 +40,6 @@ export default function Sanidad() {
 
   const loadData = useCallback(async () => {
     try {
-      setLoading(true);
       const [recordsRes, lotsRes] = await Promise.all([
         supabase.from('health_records').select('*').order('date', { ascending: false }),
         supabase.from('lots').select('id, code').order('start_date', { ascending: false }),

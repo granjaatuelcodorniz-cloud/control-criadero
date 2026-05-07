@@ -51,7 +51,6 @@ export default function Stock() {
 
   const loadData = useCallback(async () => {
     try {
-      setLoading(true);
       const [itemsRes, movRes] = await Promise.all([
         supabase.from('stock_items').select('*').order('name'),
         supabase.from('stock_movements').select('*').order('date', { ascending: false }).limit(20),
