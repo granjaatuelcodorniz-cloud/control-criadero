@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { supabase } from '@/lib/supabase';
+import { createClient } from '@/lib/supabase';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 
@@ -17,23 +17,33 @@ export default function Login() {
     setLoading(true);
     setError('');
 
+    const supabase = createClient();
+
     const { data, error: signInError } = await supabase.auth.signInWithPassword({
       email: email.trim(),
       password,
     });
 
-    if (signInError) {
+    if (signInError || !data.user) {
       setError('Email o contraseña incorrectos. Verificá los datos.');
       setLoading(false);
       return;
     }
 
-    if (data.user) {
-      // router.refresh() notifica a Next.js que la sesión cambió.
-      // El middleware detecta al usuario y redirige al destino correcto según rol,
-      // sin necesidad de hardcodear la ruta ni usar setTimeout.
-      router.refresh();
+    // Con el usuario autenticado, consultamos su perfil para saber a dónde redirigir.
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('role')
+      .eq('id', data.user.id)
+      .single();
+
+    if (profile?.role === 'owner') {
+      router.push('/dashboard/admin');
+    } else {
+      router.push('/dashboard');
     }
+    // No hacemos setLoading(false) acá: el botón queda en "Ingresando..."
+    // mientras Next.js navega, lo cual es la experiencia correcta.
   };
 
   return (
