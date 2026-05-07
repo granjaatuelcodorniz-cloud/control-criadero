@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useEffect, useState, useMemo } from 'react';
+import { createContext, useContext, useEffect, useState, useRef, useMemo } from 'react';
 import { createClient } from '@/lib/supabase';
 import { User } from '@supabase/supabase-js';
 import { useRouter } from 'next/navigation';
@@ -32,8 +32,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Carga el perfil desde la tabla profiles y lo guarda en estado.
-  // Devuelve el perfil para que quien lo llame pueda usarlo inmediatamente.
+  // Este flag garantiza que onAuthStateChange no toque el loading
+  // mientras init() todavía está corriendo.
+  const initialized = useRef(false);
+
   const fetchProfile = async (userId: string): Promise<Profile | null> => {
     try {
       const { data } = await supabase
@@ -52,7 +54,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  // Redirige al destino correcto según el rol del usuario.
   const redirectByRole = (role: Profile['role']) => {
     if (role === 'owner') {
       router.push('/dashboard/admin');
@@ -76,13 +77,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       } catch (error) {
         console.error('Error iniciando sesión:', error);
       } finally {
-        // Siempre se ejecuta, sin importar si había sesión o no.
-        // Esto evita el loading infinito en cualquier escenario.
-        if (mounted) setLoading(false);
+        if (mounted) {
+          // Marcamos como inicializado ANTES de bajar el loading,
+          // para que onAuthStateChange sepa que ya puede operar.
+          initialized.current = true;
+          setLoading(false);
+        }
       }
     };
-
-    init();
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, session) => {
@@ -92,24 +94,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setUser(null);
           setProfile(null);
           router.push('/');
+          return;
+        }
 
-        } else if (event === 'SIGNED_IN' && session?.user) {
+        // Si init() todavía no terminó, ignoramos este evento.
+        // init() ya se está ocupando de cargar el estado inicial.
+        if (!initialized.current) return;
+
+        if (event === 'SIGNED_IN' && session?.user) {
           setUser(session.user);
           const fetchedProfile = await fetchProfile(session.user.id);
           setLoading(false);
-          // Con el perfil en mano, redirigimos según rol.
-          // Esta es la pieza que faltaba para cerrar el flujo de login.
           if (fetchedProfile) {
             redirectByRole(fetchedProfile.role);
           }
-
         } else if (event === 'TOKEN_REFRESHED' && session?.user) {
           setUser(session.user);
           await fetchProfile(session.user.id);
-          setLoading(false);
         }
       }
     );
+
+    init();
 
     return () => {
       mounted = false;
