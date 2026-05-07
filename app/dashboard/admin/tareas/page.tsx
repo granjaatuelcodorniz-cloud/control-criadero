@@ -37,7 +37,7 @@ export default function Tareas() {
 
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
 
   const today = new Date().toISOString().split('T')[0];
 

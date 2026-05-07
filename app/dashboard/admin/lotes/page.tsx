@@ -38,7 +38,7 @@ export default function Lotes() {
   const [newNotes, setNewNotes] = useState('');
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
 
   const loadData = useCallback(async () => {
     try {
