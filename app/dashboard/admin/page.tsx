@@ -40,7 +40,7 @@ export default function AdminDashboard() {
   const [weekRecords, setWeekRecords] = useState<DailyRecord[]>([]);
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [totalAves, setTotalAves] = useState(0);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
 
   const today = new Date().toISOString().split('T')[0];
 
