@@ -32,8 +32,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Este flag garantiza que onAuthStateChange no toque el loading
-  // mientras init() todavía está corriendo.
+  // Garantiza que onAuthStateChange no interfiere mientras init() corre.
   const initialized = useRef(false);
 
   const fetchProfile = async (userId: string): Promise<Profile | null> => {
@@ -78,8 +77,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         console.error('Error iniciando sesión:', error);
       } finally {
         if (mounted) {
-          // Marcamos como inicializado ANTES de bajar el loading,
-          // para que onAuthStateChange sepa que ya puede operar.
           initialized.current = true;
           setLoading(false);
         }
@@ -97,8 +94,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           return;
         }
 
-        // Si init() todavía no terminó, ignoramos este evento.
-        // init() ya se está ocupando de cargar el estado inicial.
+        // Ignoramos eventos hasta que init() termine.
         if (!initialized.current) return;
 
         if (event === 'SIGNED_IN' && session?.user) {
@@ -108,9 +104,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           if (fetchedProfile) {
             redirectByRole(fetchedProfile.role);
           }
-        } else if (event === 'TOKEN_REFRESHED' && session?.user) {
-          setUser(session.user);
-          await fetchProfile(session.user.id);
+
+        } else if (event === 'TOKEN_REFRESHED') {
+          // El token se refrescó automáticamente — el usuario es el mismo.
+          // No tocamos el estado de React para evitar re-renders que
+          // disparan los useEffect de todas las páginas y causan loadings
+          // innecesarios al volver de un cambio de pestaña.
         }
       }
     );
