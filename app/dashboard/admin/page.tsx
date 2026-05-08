@@ -93,6 +93,11 @@ export default function AdminDashboard() {
     if (!user || !profile) { router.push('/'); return; }
     if (profile.role !== 'owner') { router.push('/dashboard'); return; }
     load();
+    const handleVisible = () => {
+      if (document.visibilityState === 'visible') load();
+    };
+    document.addEventListener('visibilitychange', handleVisible);
+    return () => document.removeEventListener('visibilitychange', handleVisible);
   }, [authLoading, user, profile]);
 
   if (authLoading || loading) return (
