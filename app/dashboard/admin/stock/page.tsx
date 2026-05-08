@@ -71,6 +71,12 @@ export default function Stock() {
     loadData();
   }, [authLoading, user, profile]);
 
+  useEffect(() => {
+    const handleAppVisible = () => { loadData(); };
+    window.addEventListener('app:visible', handleAppVisible);
+    return () => window.removeEventListener('app:visible', handleAppVisible);
+  }, [loadData]);
+
   const handleOpenBolsa = async (feedItem: StockItem) => {
     if (!feedItem.kg_por_bolsa || !feedItem.bolsas_restantes || !user) return;
     setSaving(true);

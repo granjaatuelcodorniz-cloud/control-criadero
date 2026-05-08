@@ -94,6 +94,12 @@ export default function AdminDashboard() {
     if (profile.role !== 'owner') { router.push('/dashboard'); return; }
     load();
   }, [authLoading, user, profile]);
+ 
+  useEffect(() => {
+    const handleAppVisible = () => { load(); };
+    window.addEventListener('app:visible', handleAppVisible);
+    return () => window.removeEventListener('app:visible', handleAppVisible);
+  }, []);
 
   if (authLoading || loading) return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center">
