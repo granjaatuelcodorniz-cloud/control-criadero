@@ -71,12 +71,6 @@ export default function Lotes() {
     loadData();
   }, [authLoading, user, profile]);
 
-  useEffect(() => {
-    const handleAppVisible = () => { loadData(); };
-    window.addEventListener('app:visible', handleAppVisible);
-    return () => window.removeEventListener('app:visible', handleAppVisible);
-  }, [loadData]);
-
   const handleNewLot = async () => {
     if (!newCode.trim() || newQty <= 0 || !user) return;
     setSaving(true);

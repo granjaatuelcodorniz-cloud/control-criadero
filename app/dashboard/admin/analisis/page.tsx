@@ -88,12 +88,6 @@ export default function Analisis() {
     loadInitialData();
   }, [authLoading, user, profile]);
 
-  useEffect(() => {
-    const handleAppVisible = () => { loadInitialData(); };
-    window.addEventListener('app:visible', handleAppVisible);
-    return () => window.removeEventListener('app:visible', handleAppVisible);
-  }, []);
-
   const handleSearchDay = async () => {
     setLoading(true);
     setDaySearched(true);

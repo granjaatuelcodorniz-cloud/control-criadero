@@ -68,12 +68,6 @@ export default function Tareas() {
     loadData();
   }, [authLoading, user, profile]);
 
-  useEffect(() => {
-    const handleAppVisible = () => { loadData(); };
-    window.addEventListener('app:visible', handleAppVisible);
-    return () => window.removeEventListener('app:visible', handleAppVisible);
-  }, [loadData]);
-
   const handleSave = async () => {
     if (!newDesc.trim() || !user) return;
     setSaving(true);

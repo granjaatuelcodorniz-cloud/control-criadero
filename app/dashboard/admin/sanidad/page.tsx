@@ -60,12 +60,6 @@ export default function Sanidad() {
     loadData();
   }, [authLoading, user, profile]);
 
-  useEffect(() => {
-    const handleAppVisible = () => { loadData(); };
-    window.addEventListener('app:visible', handleAppVisible);
-    return () => window.removeEventListener('app:visible', handleAppVisible);
-  }, [loadData]);
-
   const handleSave = async () => {
     if (!tipo || !date || !user) return;
     setSaving(true);

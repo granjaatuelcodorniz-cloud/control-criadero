@@ -92,12 +92,6 @@ export default function Dashboard() {
     loadData();
   }, [authLoading, user, profile]);
 
-  useEffect(() => {
-    const handleAppVisible = () => { loadData(); };
-    window.addEventListener('app:visible', handleAppVisible);
-    return () => window.removeEventListener('app:visible', handleAppVisible);
-  }, []);
-
   const toggleTask = async (taskId: number) => {
     if (!user) return;
     const isDone = completedIds.includes(taskId);
