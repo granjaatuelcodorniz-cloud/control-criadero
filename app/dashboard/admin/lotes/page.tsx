@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import Header from '@/components/Header';
-import { Plus, X, ChevronDown, ChevronUp, Skull, AlertCircle } from 'lucide-react';
+import { Plus, X, ChevronDown, ChevronUp, Skull, AlertCircle, ArrowLeftRight, MoveRight } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useRouter } from 'next/navigation';
 
@@ -65,12 +65,32 @@ function SlotGrid({
   slots,
   onSlotPress,
   interactive = false,
+  reorderMode = false,
+  selectedOrigin = null,
+  allLotSlots = [],
 }: {
   slots: CageSlot[];
   onSlotPress?: (slot: CageSlot) => void;
   interactive?: boolean;
+  reorderMode?: boolean;
+  selectedOrigin?: CageSlot | null;
+  allLotSlots?: CageSlot[]; // all slots of the lot (including empty) for reorder targets
 }) {
   const slotMap = new Map(slots.map(s => [s.slot_code, s]));
+  const allSlotMap = new Map(allLotSlots.map(s => [s.slot_code, s]));
+
+  const getSlotStyle = (slot: CageSlot) => {
+    if (reorderMode) {
+      if (selectedOrigin?.id === slot.id)
+        return 'bg-blue-500 text-white border-blue-500 scale-110 shadow-lg shadow-blue-200 ring-2 ring-blue-300';
+      if (selectedOrigin && slot.quantity < 9)
+        return 'bg-blue-50 text-blue-700 border-blue-300 hover:bg-blue-100 cursor-pointer';
+      if (!selectedOrigin && slot.quantity > 0)
+        return `${slotColor(slot.quantity)} hover:scale-110 hover:shadow-md cursor-pointer`;
+      return `${slotColor(slot.quantity)} opacity-40 cursor-default`;
+    }
+    return `${slotColor(slot.quantity)} ${interactive && slot.quantity > 0 ? 'hover:scale-110 hover:shadow-md active:scale-95 cursor-pointer' : 'cursor-default'}`;
+  };
 
   return (
     <div className="overflow-x-auto -mx-1">
@@ -78,7 +98,7 @@ function SlotGrid({
         {/* Column headers */}
         <div className="flex gap-1 mb-1 ml-7">
           {Array.from({ length: TOTAL_COLS }, (_, i) => i + 1).map(col => {
-            const hasSlot = ROWS.some(r => slotMap.has(`${r}${col}`));
+            const hasSlot = ROWS.some(r => slotMap.has(`${r}${col}`) || allSlotMap.has(`${r}${col}`));
             return (
               <div
                 key={col}
@@ -97,7 +117,20 @@ function SlotGrid({
             {Array.from({ length: TOTAL_COLS }, (_, i) => i + 1).map(col => {
               const code = `${row}${col}`;
               const slot = slotMap.get(code);
+              const allSlot = allSlotMap.get(code);
+
+              // In reorder mode, show empty slots of this lot as valid targets
               if (!slot) {
+                if (reorderMode && selectedOrigin && allSlot && allSlot.quantity === 0) {
+                  return (
+                    <button
+                      key={code}
+                      onClick={() => onSlotPress?.(allSlot)}
+                      className="w-7 h-7 rounded border-2 border-dashed border-blue-300 bg-blue-50 hover:bg-blue-100 transition-all"
+                      title={`${code}: vacía — mover acá`}
+                    />
+                  );
+                }
                 return (
                   <div
                     key={code}
@@ -105,15 +138,18 @@ function SlotGrid({
                   />
                 );
               }
+
+              const isDisabled = reorderMode
+                ? (!selectedOrigin && slot.quantity === 0) ||
+                  (!!selectedOrigin && selectedOrigin.id === slot.id && false) // origin always clickable to deselect
+                : !interactive || slot.quantity === 0;
+
               return (
                 <button
                   key={code}
-                  disabled={!interactive || slot.quantity === 0}
+                  disabled={isDisabled}
                   onClick={() => onSlotPress?.(slot)}
-                  className={`w-7 h-7 rounded border text-[9px] font-black transition-all
-                    ${slotColor(slot.quantity)}
-                    ${interactive && slot.quantity > 0 ? 'hover:scale-110 hover:shadow-md active:scale-95 cursor-pointer' : 'cursor-default'}
-                  `}
+                  className={`w-7 h-7 rounded border text-[9px] font-black transition-all ${getSlotStyle(slot)}`}
                   title={`${code}: ${slot.quantity} aves`}
                 >
                   {slot.quantity}
@@ -124,19 +160,129 @@ function SlotGrid({
         ))}
 
         {/* Legend */}
-        <div className="flex items-center gap-3 mt-2 ml-7">
-          {[
-            { cls: 'bg-emerald-50 border-emerald-200', label: '8-9 aves' },
-            { cls: 'bg-yellow-50 border-yellow-200', label: '6-7 aves' },
-            { cls: 'bg-red-50 border-red-200', label: '< 6 aves' },
-            { cls: 'bg-gray-100 border-gray-200', label: 'Vacía' },
-          ].map(({ cls, label }) => (
-            <div key={label} className="flex items-center gap-1">
-              <div className={`w-3 h-3 rounded border ${cls}`} />
-              <span className="text-[9px] text-gray-400">{label}</span>
+        {(() => {
+          const items = reorderMode
+            ? [
+                { cls: 'bg-blue-500 border-blue-500', label: 'Origen seleccionado' },
+                { cls: 'bg-blue-50 border-blue-300', label: 'Destino posible' },
+                { cls: 'bg-gray-50 border-blue-300 border-dashed', label: 'Boca vacía (destino)' },
+              ]
+            : [
+                { cls: 'bg-emerald-50 border-emerald-200', label: '8-9 aves' },
+                { cls: 'bg-yellow-50 border-yellow-200', label: '6-7 aves' },
+                { cls: 'bg-red-50 border-red-200', label: '< 6 aves' },
+                { cls: 'bg-gray-100 border-gray-200', label: 'Vacía' },
+              ];
+          return (
+            <div className="flex items-center gap-3 mt-2 ml-7 flex-wrap">
+              {items.map(({ cls, label }) => (
+                <div key={label} className="flex items-center gap-1">
+                  <div className={`w-3 h-3 rounded border ${cls}`} />
+                  <span className="text-[9px] text-gray-400">{label}</span>
+                </div>
+              ))}
             </div>
-          ))}
+          );
+        })()}
+      </div>
+    </div>
+  );
+}
+
+// ─── Reorder Modal ────────────────────────────────────────────────────────────
+
+function ReorderModal({
+  origin,
+  destination,
+  onClose,
+  onConfirm,
+}: {
+  origin: CageSlot;
+  destination: CageSlot;
+  onClose: () => void;
+  onConfirm: (qty: number) => Promise<void>;
+}) {
+  const maxMovable = Math.min(origin.quantity, 9 - destination.quantity);
+  const [qty, setQty] = useState(Math.min(maxMovable, 1));
+  const [saving, setSaving] = useState(false);
+
+  const handle = async () => {
+    if (qty < 1 || qty > maxMovable) return;
+    setSaving(true);
+    await onConfirm(qty);
+    setSaving(false);
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/40 z-50 flex items-end sm:items-center justify-center p-4">
+      <div className="bg-white rounded-3xl w-full max-w-sm p-6 space-y-5 shadow-2xl">
+        <div className="flex items-start justify-between">
+          <div>
+            <h3 className="text-lg font-black text-gray-900">Mover Aves</h3>
+            <p className="text-sm text-gray-400 mt-0.5">Reacomodamiento entre bocas</p>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full transition-colors">
+            <X className="w-5 h-5 text-gray-400" />
+          </button>
         </div>
+
+        {/* Origin → Destination visual */}
+        <div className="flex items-center gap-3">
+          <div className="flex-1 bg-blue-50 border border-blue-100 rounded-2xl p-3 text-center">
+            <p className="text-[10px] font-bold uppercase text-blue-400 mb-1">Origen</p>
+            <p className="text-xl font-black text-blue-700">{origin.slot_code}</p>
+            <p className="text-xs text-blue-400 mt-0.5">{origin.quantity} aves</p>
+          </div>
+          <MoveRight className="w-5 h-5 text-gray-300 shrink-0" />
+          <div className="flex-1 bg-emerald-50 border border-emerald-100 rounded-2xl p-3 text-center">
+            <p className="text-[10px] font-bold uppercase text-emerald-400 mb-1">Destino</p>
+            <p className="text-xl font-black text-emerald-700">{destination.slot_code}</p>
+            <p className="text-xs text-emerald-400 mt-0.5">{destination.quantity} aves → {destination.quantity + qty}</p>
+          </div>
+        </div>
+
+        <div>
+          <label className="text-xs font-bold text-gray-500 uppercase ml-1">
+            Cantidad a mover <span className="text-gray-300 font-normal">(máx. {maxMovable})</span>
+          </label>
+          <div className="flex items-center gap-3 mt-2">
+            <button
+              onClick={() => setQty(q => Math.max(1, q - 1))}
+              className="w-11 h-11 rounded-2xl bg-gray-100 hover:bg-gray-200 font-black text-xl flex items-center justify-center transition-colors"
+            >−</button>
+            <input
+              type="number"
+              min={1}
+              max={maxMovable}
+              value={qty}
+              onChange={e => setQty(Math.min(maxMovable, Math.max(1, Number(e.target.value))))}
+              className="input-base text-center text-2xl font-black h-11 py-0"
+            />
+            <button
+              onClick={() => setQty(q => Math.min(maxMovable, q + 1))}
+              className="w-11 h-11 rounded-2xl bg-gray-100 hover:bg-gray-200 font-black text-xl flex items-center justify-center transition-colors"
+            >+</button>
+          </div>
+          {qty === origin.quantity && (
+            <p className="text-xs text-amber-500 mt-1.5 ml-1 flex items-center gap-1">
+              <AlertCircle className="w-3 h-3" /> La boca origen quedará vacía
+            </p>
+          )}
+          {destination.quantity + qty === 9 && (
+            <p className="text-xs text-emerald-600 mt-1.5 ml-1 flex items-center gap-1">
+              ✓ La boca destino quedará completa (9 aves)
+            </p>
+          )}
+        </div>
+
+        <button
+          onClick={handle}
+          disabled={saving || qty < 1}
+          className="btn-primary w-full py-4 text-base shadow-yellow-200 shadow-lg"
+        >
+          <ArrowLeftRight className="w-4 h-4" />
+          {saving ? 'Moviendo...' : `Mover ${qty} ave${qty > 1 ? 's' : ''}`}
+        </button>
       </div>
     </div>
   );
@@ -453,14 +599,18 @@ function LotCard({
   losses,
   isOwner,
   onLoss,
+  onReorder,
 }: {
   lot: Lot;
   slots: CageSlot[];
   losses: Loss[];
   isOwner: boolean;
   onLoss: (slot: CageSlot) => void;
+  onReorder: (origin: CageSlot, destination: CageSlot) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [reorderMode, setReorderMode] = useState(false);
+  const [originSlot, setOriginSlot] = useState<CageSlot | null>(null);
 
   const totalSlots = slots.length;
   const emptySlots = slots.filter(s => s.quantity === 0).length;
@@ -479,6 +629,22 @@ function LotCard({
     : pctSupervivencia > 75
       ? 'bg-yellow-400'
       : 'bg-red-400';
+
+  const handleSlotPressReorder = (slot: CageSlot) => {
+    if (!originSlot) {
+      // Select origin — must have aves
+      if (slot.quantity > 0) setOriginSlot(slot);
+      return;
+    }
+    // Deselect if tapping origin again
+    if (originSlot.id === slot.id) { setOriginSlot(null); return; }
+    // Destination must have room and belong to this lot
+    if (slot.quantity >= 9) return;
+    onReorder(originSlot, slot);
+    setOriginSlot(null);
+  };
+
+  const exitReorder = () => { setReorderMode(false); setOriginSlot(null); };
 
   return (
     <div className="bg-white rounded-3xl border border-gray-100 shadow-sm hover:shadow-md transition-shadow overflow-hidden">
@@ -560,7 +726,7 @@ function LotCard({
       {totalSlots > 0 && (
         <>
           <button
-            onClick={() => setExpanded(e => !e)}
+            onClick={() => { setExpanded(e => !e); if (expanded) exitReorder(); }}
             className="w-full flex items-center justify-between px-5 py-3 border-t border-gray-100 text-sm font-bold text-gray-500 hover:bg-gray-50 transition-colors"
           >
             <span>{expanded ? 'Ocultar' : 'Ver'} grilla de bocas</span>
@@ -569,15 +735,47 @@ function LotCard({
 
           {expanded && (
             <div className="px-5 pb-5 pt-2">
-              {isOwner || true /* collaborators can also register losses */ ? (
-                <p className="text-[10px] text-gray-400 mb-3 font-medium">
-                  Tocá una boca para registrar una baja
-                </p>
-              ) : null}
+              {/* Mode toggle bar */}
+              <div className="flex items-center justify-between mb-3">
+                {reorderMode ? (
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-bold text-blue-600 uppercase">
+                      {originSlot ? `Origen: ${originSlot.slot_code} — tocá el destino` : 'Tocá la boca origen'}
+                    </span>
+                    {originSlot && (
+                      <button onClick={() => setOriginSlot(null)}
+                        className="text-[10px] text-gray-400 underline">
+                        cancelar
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-[10px] text-gray-400 font-medium">
+                    Tocá una boca para registrar una baja
+                  </p>
+                )}
+                {isOwner && (
+                  <button
+                    onClick={() => reorderMode ? exitReorder() : setReorderMode(true)}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all
+                      ${reorderMode
+                        ? 'bg-blue-100 text-blue-700 hover:bg-blue-200'
+                        : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                      }`}
+                  >
+                    <ArrowLeftRight className="w-3 h-3" />
+                    {reorderMode ? 'Salir' : 'Reacomodar'}
+                  </button>
+                )}
+              </div>
+
               <SlotGrid
                 slots={slots}
-                onSlotPress={onLoss}
-                interactive
+                onSlotPress={reorderMode ? handleSlotPressReorder : onLoss}
+                interactive={!reorderMode}
+                reorderMode={reorderMode}
+                selectedOrigin={originSlot}
+                allLotSlots={slots}
               />
             </div>
           )}
@@ -599,6 +797,7 @@ export default function Lotes() {
 
   const [showNewLot, setShowNewLot] = useState(false);
   const [selectedSlot, setSelectedSlot] = useState<{ slot: CageSlot; lot: Lot } | null>(null);
+  const [reorderPair, setReorderPair] = useState<{ origin: CageSlot; destination: CageSlot } | null>(null);
 
   const [loading, setLoading] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -702,6 +901,22 @@ export default function Lotes() {
     await loadData();
   };
 
+  // ── Reorder slots ───────────────────────────────────────────────────────────
+  const handleReorder = async (qty: number) => {
+    if (!reorderPair) return;
+    const { origin, destination } = reorderPair;
+
+    await Promise.all([
+      supabase.from('cage_slots').update({ quantity: origin.quantity - qty }).eq('id', origin.id),
+      supabase.from('cage_slots').update({ quantity: destination.quantity + qty }).eq('id', destination.id),
+    ]);
+
+    setReorderPair(null);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 3000);
+    await loadData();
+  };
+
   // ── Derived data ────────────────────────────────────────────────────────────
   const occupiedSlots = new Set(slots.filter(s => s.quantity > 0).map(s => s.slot_code));
 
@@ -775,6 +990,7 @@ export default function Lotes() {
               losses={losses}
               isOwner={isOwner}
               onLoss={slot => setSelectedSlot({ slot, lot })}
+              onReorder={(origin, destination) => setReorderPair({ origin, destination })}
             />
           ))}
         </div>
@@ -807,6 +1023,16 @@ export default function Lotes() {
           lot={selectedSlot.lot}
           onClose={() => setSelectedSlot(null)}
           onConfirm={handleLoss}
+        />
+      )}
+
+      {/* Reorder modal */}
+      {reorderPair && (
+        <ReorderModal
+          origin={reorderPair.origin}
+          destination={reorderPair.destination}
+          onClose={() => setReorderPair(null)}
+          onConfirm={handleReorder}
         />
       )}
     </div>
