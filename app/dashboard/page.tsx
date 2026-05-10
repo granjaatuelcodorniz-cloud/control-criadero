@@ -8,12 +8,10 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
   Egg, CheckSquare, AlertTriangle, ClipboardList,
-  Plus, X, ChevronDown, ChevronUp, Skull, AlertCircle,
+  Plus, X, Bird, ChevronRight,
 } from 'lucide-react';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
-
-type LossType = 'muerte' | 'descarte' | 'venta';
 
 type Task = {
   id: number;
@@ -21,20 +19,6 @@ type Task = {
   type: 'daily' | 'periodic' | 'custom';
   frequency_days?: number;
   is_urgent?: boolean;
-};
-
-type Lot = {
-  id: number;
-  code: string;
-  current_quantity: number;
-  status: string;
-};
-
-type CageSlot = {
-  id: number;
-  lot_id: number;
-  slot_code: string;
-  quantity: number;
 };
 
 type StockItem = {
@@ -47,223 +31,6 @@ type StockItem = {
   kg_por_bolsa?: number | null;
 };
 
-// ─── Constants ────────────────────────────────────────────────────────────────
-
-const ROWS = ['A', 'B', 'C', 'D', 'E', 'F'];
-const TOTAL_COLS = 42;
-
-const LOSS_TYPE_LABELS: Record<LossType, string> = {
-  muerte: 'Muerte',
-  descarte: 'Descarte',
-  venta: 'Venta',
-};
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function slotColor(qty: number) {
-  if (qty === 0) return 'bg-gray-100 text-gray-300 border-gray-200';
-  if (qty >= 8) return 'bg-emerald-50 text-emerald-700 border-emerald-200';
-  if (qty >= 6) return 'bg-yellow-50 text-yellow-700 border-yellow-200';
-  return 'bg-red-50 text-red-600 border-red-200';
-}
-
-// ─── Slot Grid ────────────────────────────────────────────────────────────────
-
-function SlotGrid({
-  slots,
-  onSlotPress,
-}: {
-  slots: CageSlot[];
-  onSlotPress: (slot: CageSlot) => void;
-}) {
-  const slotMap = new Map(slots.map(s => [s.slot_code, s]));
-
-  return (
-    <div className="overflow-x-auto -mx-1">
-      <div className="inline-block min-w-full px-1">
-        <div className="flex gap-1 mb-1 ml-7">
-          {Array.from({ length: TOTAL_COLS }, (_, i) => i + 1).map(col => {
-            const hasSlot = ROWS.some(r => slotMap.has(`${r}${col}`));
-            return (
-              <div key={col} className={`w-7 text-center text-[9px] font-bold ${hasSlot ? 'text-gray-500' : 'text-gray-200'}`}>
-                {col}
-              </div>
-            );
-          })}
-        </div>
-        {ROWS.map(row => (
-          <div key={row} className="flex items-center gap-1 mb-1">
-            <div className="w-6 text-center text-[10px] font-black text-gray-400">{row}</div>
-            {Array.from({ length: TOTAL_COLS }, (_, i) => i + 1).map(col => {
-              const code = `${row}${col}`;
-              const slot = slotMap.get(code);
-              if (!slot) return <div key={code} className="w-7 h-7 rounded border border-dashed border-gray-100 bg-gray-50" />;
-              return (
-                <button key={code}
-                  disabled={slot.quantity === 0}
-                  onClick={() => onSlotPress(slot)}
-                  className={`w-7 h-7 rounded border text-[9px] font-black transition-all
-                    ${slotColor(slot.quantity)}
-                    ${slot.quantity > 0 ? 'hover:scale-110 hover:shadow-md active:scale-95 cursor-pointer' : 'cursor-default'}`}
-                  title={`${code}: ${slot.quantity} aves`}>
-                  {slot.quantity}
-                </button>
-              );
-            })}
-          </div>
-        ))}
-        <div className="flex items-center gap-3 mt-2 ml-7 flex-wrap">
-          {[
-            { cls: 'bg-emerald-50 border-emerald-200', label: '8-9 aves' },
-            { cls: 'bg-yellow-50 border-yellow-200', label: '6-7 aves' },
-            { cls: 'bg-red-50 border-red-200', label: '< 6 aves' },
-          ].map(({ cls, label }) => (
-            <div key={label} className="flex items-center gap-1">
-              <div className={`w-3 h-3 rounded border ${cls}`} />
-              <span className="text-[9px] text-gray-400">{label}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── Loss Modal ───────────────────────────────────────────────────────────────
-
-function LossModal({
-  slot, lot, onClose, onConfirm,
-}: {
-  slot: CageSlot;
-  lot: Lot;
-  onClose: () => void;
-  onConfirm: (qty: number, reason: string, lossType: LossType) => Promise<void>;
-}) {
-  const [qty, setQty] = useState(1);
-  const [reason, setReason] = useState('');
-  const [lossType, setLossType] = useState<LossType>('muerte');
-  const [saving, setSaving] = useState(false);
-
-  const handle = async () => {
-    if (qty < 1 || qty > slot.quantity) return;
-    setSaving(true);
-    await onConfirm(qty, reason, lossType);
-    setSaving(false);
-  };
-
-  return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-end sm:items-center justify-center p-4">
-      <div className="bg-white rounded-3xl w-full max-w-sm p-6 space-y-5 shadow-2xl">
-        <div className="flex items-start justify-between">
-          <div>
-            <h3 className="text-lg font-black text-gray-900">Registrar Baja</h3>
-            <p className="text-sm text-gray-400 mt-0.5">
-              Boca <span className="font-bold text-gray-700">{slot.slot_code}</span> — {lot.code}
-            </p>
-          </div>
-          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full transition-colors">
-            <X className="w-5 h-5 text-gray-400" />
-          </button>
-        </div>
-
-        <div className="bg-gray-50 rounded-2xl p-3 text-center">
-          <p className="text-[10px] font-bold uppercase text-gray-400 mb-1">Aves actuales en esta boca</p>
-          <p className="text-3xl font-black text-gray-800">{slot.quantity}</p>
-        </div>
-
-        <div>
-          <label className="text-xs font-bold text-gray-500 uppercase ml-1">Tipo de baja</label>
-          <div className="flex gap-2 mt-2">
-            {(['muerte', 'descarte', 'venta'] as LossType[]).map(type => (
-              <button key={type} onClick={() => setLossType(type)}
-                className={`flex-1 py-2 rounded-xl text-xs font-bold border-2 transition-all
-                  ${lossType === type
-                    ? type === 'muerte' ? 'bg-red-50 border-red-400 text-red-600'
-                      : type === 'descarte' ? 'bg-orange-50 border-orange-400 text-orange-600'
-                      : 'bg-blue-50 border-blue-400 text-blue-600'
-                    : 'bg-white border-gray-200 text-gray-400 hover:border-gray-300'}`}>
-                {LOSS_TYPE_LABELS[type]}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div>
-          <label className="text-xs font-bold text-gray-500 uppercase ml-1">Cantidad</label>
-          <div className="flex items-center gap-3 mt-2">
-            <button onClick={() => setQty(q => Math.max(1, q - 1))}
-              className="w-11 h-11 rounded-2xl bg-gray-100 hover:bg-gray-200 font-black text-xl flex items-center justify-center transition-colors">−</button>
-            <input type="number" min={1} max={slot.quantity} value={qty}
-              onChange={e => setQty(Math.min(slot.quantity, Math.max(1, Number(e.target.value))))}
-              className="input-base text-center text-2xl font-black h-11 py-0" />
-            <button onClick={() => setQty(q => Math.min(slot.quantity, q + 1))}
-              className="w-11 h-11 rounded-2xl bg-gray-100 hover:bg-gray-200 font-black text-xl flex items-center justify-center transition-colors">+</button>
-          </div>
-          {qty === slot.quantity && (
-            <p className="text-xs text-red-500 mt-1.5 ml-1 flex items-center gap-1">
-              <AlertCircle className="w-3 h-3" /> Esta boca quedará vacía y se liberará
-            </p>
-          )}
-        </div>
-
-        <div>
-          <label className="text-xs font-bold text-gray-500 uppercase ml-1">Motivo (opcional)</label>
-          <input className="input-base mt-1"
-            placeholder={lossType === 'muerte' ? 'Ej: enfermedad, accidente...' : lossType === 'descarte' ? 'Ej: fin de ciclo...' : 'Ej: venta a terceros...'}
-            value={reason} onChange={e => setReason(e.target.value)} />
-        </div>
-
-        <button onClick={handle} disabled={saving}
-          className="btn-primary w-full py-4 text-base shadow-yellow-200 shadow-lg">
-          <Skull className="w-4 h-4" />
-          {saving ? 'Guardando...' : `Confirmar ${qty} ${LOSS_TYPE_LABELS[lossType].toLowerCase()}${qty > 1 ? 's' : ''}`}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ─── Lot Section (grilla por lote) ────────────────────────────────────────────
-
-function LotSection({
-  lot, slots, onLoss,
-}: {
-  lot: Lot;
-  slots: CageSlot[];
-  onLoss: (slot: CageSlot, lot: Lot) => void;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const totalAves = slots.reduce((s, sl) => s + sl.quantity, 0);
-  const activeSlots = slots.filter(s => s.quantity > 0).length;
-
-  return (
-    <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
-      <button
-        onClick={() => setExpanded(e => !e)}
-        className="w-full flex items-center justify-between p-4 hover:bg-gray-50 transition-colors"
-      >
-        <div className="flex items-center gap-3">
-          <div className="text-left">
-            <p className="font-bold text-gray-800">{lot.code}</p>
-            <p className="text-xs text-gray-400">{totalAves} aves · {activeSlots} bocas</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-3">
-          <span className="text-lg font-black text-gray-800">{totalAves}</span>
-          {expanded ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
-        </div>
-      </button>
-
-      {expanded && (
-        <div className="px-4 pb-4 pt-1 border-t border-gray-100">
-          <p className="text-[10px] text-gray-400 font-medium mb-3">Tocá una boca para registrar una baja</p>
-          <SlotGrid slots={slots} onSlotPress={slot => onLoss(slot, lot)} />
-        </div>
-      )}
-    </div>
-  );
-}
-
 // ─── Main Dashboard ───────────────────────────────────────────────────────────
 
 export default function Dashboard() {
@@ -274,35 +41,28 @@ export default function Dashboard() {
   const [periodicTasks, setPeriodicTasks] = useState<Task[]>([]);
   const [customTasks, setCustomTasks] = useState<Task[]>([]);
   const [completedIds, setCompletedIds] = useState<number[]>([]);
-  const [lots, setLots] = useState<Lot[]>([]);
-  const [slots, setSlots] = useState<CageSlot[]>([]);
   const [stockItems, setStockItems] = useState<StockItem[]>([]);
+  const [totalAvesActivas, setTotalAvesActivas] = useState(0);
 
-  const [selectedSlot, setSelectedSlot] = useState<{ slot: CageSlot; lot: Lot } | null>(null);
-
-  const [loading, setLoading] = useState(false);
-  const [lossSaved, setLossSaved] = useState(false);
   const [stockSaved, setStockSaved] = useState(false);
   const [savingStock, setSavingStock] = useState(false);
   const [confirmStock, setConfirmStock] = useState<number | null>(null);
   const [showExtraTask, setShowExtraTask] = useState(false);
   const [extraTaskDesc, setExtraTaskDesc] = useState('');
+  const [loading, setLoading] = useState(false);
 
   const today = new Date().toISOString().split('T')[0];
 
   const loadData = useCallback(async () => {
     if (!user) return;
     try {
-      const [tasksRes, completionsRes, lotsRes, slotsRes, stockRes] = await Promise.all([
+      const [tasksRes, completionsRes, slotsRes, stockRes] = await Promise.all([
         supabase.from('tasks').select('id, description, type, frequency_days, is_urgent')
           .eq('is_active', true)
           .or(`assigned_to.is.null,assigned_to.eq.${user.id}`)
           .order('type'),
         supabase.from('task_completions').select('task_id').eq('user_id', user.id).eq('date', today),
-        supabase.from('lots').select('id, code, current_quantity, status')
-          .eq('status', 'activo')
-          .order('start_date', { ascending: false }),
-        supabase.from('cage_slots').select('*'),
+        supabase.from('cage_slots').select('quantity'),
         supabase.from('stock_items').select('id, name, unit, current_quantity, is_feed, bolsas_restantes, kg_por_bolsa').order('name'),
       ]);
 
@@ -312,8 +72,7 @@ export default function Dashboard() {
         setCustomTasks(tasksRes.data.filter(t => t.type === 'custom'));
       }
       if (completionsRes.data) setCompletedIds(completionsRes.data.map(c => c.task_id));
-      if (lotsRes.data) setLots(lotsRes.data);
-      if (slotsRes.data) setSlots(slotsRes.data);
+      if (slotsRes.data) setTotalAvesActivas(slotsRes.data.reduce((s, sl) => s + sl.quantity, 0));
       if (stockRes.data) setStockItems(stockRes.data);
     } catch (error) {
       console.error('Error cargando dashboard colaborador:', error);
@@ -339,29 +98,6 @@ export default function Dashboard() {
       await supabase.from('task_completions').insert({ task_id: taskId, user_id: user.id, completed: true, date: today });
       setCompletedIds(prev => [...prev, taskId]);
     }
-  };
-
-  const handleLoss = async (qty: number, reason: string, lossType: LossType) => {
-    if (!selectedSlot || !user) return;
-    const { slot, lot } = selectedSlot;
-    const newQty = slot.quantity - qty;
-
-    await Promise.all([
-      supabase.from('lot_losses').insert({
-        lot_id: lot.id, date: today, quantity: qty,
-        reason: reason || null, slot_code: slot.slot_code,
-        loss_type: lossType, user_id: user.id,
-      }),
-      supabase.from('lots').update({ current_quantity: lot.current_quantity - qty }).eq('id', lot.id),
-      newQty === 0
-        ? supabase.from('cage_slots').delete().eq('id', slot.id)
-        : supabase.from('cage_slots').update({ quantity: newQty }).eq('id', slot.id),
-    ]);
-
-    setSelectedSlot(null);
-    setLossSaved(true);
-    setTimeout(() => setLossSaved(false), 3000);
-    await loadData();
   };
 
   const handleAddExtraTask = async () => {
@@ -477,10 +213,24 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Huevos CTA */}
-        <Link href="/dashboard/huevos" className="btn-primary w-full py-4 text-base rounded-2xl">
-          <Egg className="w-5 h-5" /> Registrar huevos del día
-        </Link>
+        {/* CTAs principales */}
+        <div className="grid grid-cols-2 gap-3">
+          <Link href="/dashboard/huevos"
+            className="btn-primary py-5 rounded-2xl flex flex-col items-center gap-2 text-sm font-bold">
+            <Egg className="w-6 h-6" />
+            Registrar huevos
+          </Link>
+          <Link href="/dashboard/lotes"
+            className="bg-white border-2 border-gray-200 hover:border-yellow-300 hover:bg-yellow-50/40 transition-all py-5 rounded-2xl flex flex-col items-center gap-2 text-sm font-bold text-gray-600 relative">
+            <Bird className="w-6 h-6" />
+            Aves
+            {totalAvesActivas > 0 && (
+              <span className="absolute top-2 right-2 text-[10px] font-black text-yellow-700 bg-yellow-100 px-1.5 py-0.5 rounded-full">
+                {totalAvesActivas}
+              </span>
+            )}
+          </Link>
+        </div>
 
         {/* Tasks */}
         {dailyTasks.length > 0 && (
@@ -528,31 +278,6 @@ export default function Dashboard() {
                 <button onClick={handleAddExtraTask} className="btn-primary flex-1 py-2 text-sm">Agregar</button>
                 <button onClick={() => setShowExtraTask(false)} className="btn-secondary px-3 py-2"><X className="w-4 h-4" /></button>
               </div>
-            </div>
-          )}
-        </div>
-
-        {/* Bajas por boca */}
-        <div>
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <Skull className="w-4 h-4 text-red-400" />
-              <h3 className="font-semibold text-gray-700 text-sm uppercase tracking-wide">Bajas de aves</h3>
-            </div>
-            {lossSaved && <span className="text-green-600 text-xs font-bold">✓ Guardado</span>}
-          </div>
-          {lots.length === 0 ? (
-            <p className="text-sm text-gray-400 text-center py-4">No hay lotes activos</p>
-          ) : (
-            <div className="space-y-2">
-              {lots.map(lot => (
-                <LotSection
-                  key={lot.id}
-                  lot={lot}
-                  slots={slots.filter(s => s.lot_id === lot.id && s.quantity > 0)}
-                  onLoss={(slot, lot) => setSelectedSlot({ slot, lot })}
-                />
-              ))}
             </div>
           )}
         </div>
@@ -610,17 +335,20 @@ export default function Dashboard() {
           </div>
         </div>
 
-      </div>
+        {/* Link a lotes — acceso alternativo desde el fondo */}
+        <Link href="/dashboard/lotes"
+          className="w-full flex items-center justify-between bg-white border border-gray-200 rounded-2xl px-5 py-4 hover:border-yellow-300 transition-colors">
+          <div className="flex items-center gap-3">
+            <Bird className="w-5 h-5 text-gray-400" />
+            <div>
+              <p className="font-bold text-gray-700 text-sm">Ver lotes y bocas</p>
+              <p className="text-xs text-gray-400">Bajas y reacomodamientos</p>
+            </div>
+          </div>
+          <ChevronRight className="w-4 h-4 text-gray-300" />
+        </Link>
 
-      {/* Loss modal */}
-      {selectedSlot && (
-        <LossModal
-          slot={selectedSlot.slot}
-          lot={selectedSlot.lot}
-          onClose={() => setSelectedSlot(null)}
-          onConfirm={handleLoss}
-        />
-      )}
+      </div>
     </div>
   );
 }
