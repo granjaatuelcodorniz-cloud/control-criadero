@@ -5,7 +5,8 @@ import { supabase } from '@/lib/supabase';
 import Header from '@/components/Header';
 import {
   Plus, X, Calendar, ClipboardList, Beaker,
-  AlertTriangle, ChevronDown, ChevronUp, Trash2, FlaskConical, Pencil, Check,
+  AlertTriangle, ChevronDown, ChevronUp, Trash2,
+  FlaskConical, Pencil, SkipForward,
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useRouter } from 'next/navigation';
@@ -24,6 +25,7 @@ type HealthRecord = {
   dose_calculated: number | null;
   dose_applied: number | null;
   water_liters: number | null;
+  duration_days: number | null;
 };
 
 type HealthProduct = {
@@ -33,6 +35,11 @@ type HealthProduct = {
   dose_per_bird: number;
   unit: string;
   notes: string | null;
+};
+
+type TreatmentConfirmation = {
+  record_id: number;
+  date: string;
 };
 
 type Lot = { id: number; code: string; status: string };
@@ -60,12 +67,24 @@ function nextAppStatus(dateStr: string, today: string): 'overdue' | 'soon' | 'ok
   return 'ok';
 }
 
+// Devuelve el día actual dentro del ciclo (1-based), o null si no está en ciclo
+function getTreatmentDay(record: HealthRecord, today: string): number | null {
+  if (!record.duration_days) return null;
+  const start = new Date(record.date);
+  const current = new Date(today);
+  const diff = Math.floor((current.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+  if (diff < 0 || diff >= record.duration_days) return null;
+  return diff + 1;
+}
+
+function isActiveTreatment(record: HealthRecord, today: string): boolean {
+  return getTreatmentDay(record, today) !== null;
+}
+
 // ─── Product Card ─────────────────────────────────────────────────────────────
 
 function ProductCard({
-  product,
-  onSave,
-  onDelete,
+  product, onSave, onDelete,
 }: {
   product: HealthProduct;
   onSave: (id: number, data: Partial<HealthProduct>) => Promise<void>;
@@ -94,7 +113,7 @@ function ProductCard({
           <p className="text-[10px] font-black text-gray-400 uppercase">Editar producto</p>
           <button onClick={() => setEditing(false)}><X className="w-4 h-4 text-gray-400" /></button>
         </div>
-        <input className="input-base" placeholder="Nombre del producto" value={name} onChange={e => setName(e.target.value)} />
+        <input className="input-base" placeholder="Nombre" value={name} onChange={e => setName(e.target.value)} />
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="text-[10px] font-bold text-gray-400 uppercase ml-1">Tipo</label>
@@ -112,11 +131,7 @@ function ProductCard({
           <input className="input-base mt-1" type="number" min={0} step={0.001}
             value={dosePerBird} onChange={e => setDosePerBird(Number(e.target.value))} />
         </div>
-        <div>
-          <label className="text-[10px] font-bold text-gray-400 uppercase ml-1">Notas</label>
-          <input className="input-base mt-1" placeholder="Observaciones del producto"
-            value={notes} onChange={e => setNotes(e.target.value)} />
-        </div>
+        <input className="input-base" placeholder="Notas (opcional)" value={notes} onChange={e => setNotes(e.target.value)} />
         <button onClick={handleSave} disabled={saving} className="btn-primary w-full py-3 text-sm">
           {saving ? 'Guardando...' : 'Guardar cambios'}
         </button>
@@ -133,9 +148,7 @@ function ProductCard({
             {product.type}
           </span>
         </div>
-        <p className="text-xs text-gray-400 mt-0.5">
-          {product.dose_per_bird} {product.unit} por ave
-        </p>
+        <p className="text-xs text-gray-400 mt-0.5">{product.dose_per_bird} {product.unit} por ave</p>
         {product.notes && <p className="text-xs text-gray-400 italic mt-0.5">{product.notes}</p>}
       </div>
       <div className="flex gap-1 ml-3">
@@ -160,6 +173,7 @@ export default function Sanidad() {
   const [lots, setLots] = useState<Lot[]>([]);
   const [slots, setSlots] = useState<CageSlot[]>([]);
   const [products, setProducts] = useState<HealthProduct[]>([]);
+  const [confirmations, setConfirmations] = useState<TreatmentConfirmation[]>([]);
 
   // Form state
   const [showForm, setShowForm] = useState(false);
@@ -168,14 +182,15 @@ export default function Sanidad() {
   const [productId, setProductId] = useState('');
   const [dosis, setDosis] = useState('');
   const [doseCalculated, setDoseCalculated] = useState<number | null>(null);
-  const [doseApplied, setDoseApplied] = useState<string>('');
-  const [waterLiters, setWaterLiters] = useState<string>('');
+  const [doseApplied, setDoseApplied] = useState('');
+  const [waterLiters, setWaterLiters] = useState('');
   const [notes, setNotes] = useState('');
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [nextApp, setNextApp] = useState('');
   const [nextAppDays, setNextAppDays] = useState('');
+  const [durationDays, setDurationDays] = useState('');
 
-  // Products management
+  // Products panel
   const [showProducts, setShowProducts] = useState(false);
   const [showNewProduct, setShowNewProduct] = useState(false);
   const [newProdName, setNewProdName] = useState('');
@@ -184,27 +199,34 @@ export default function Sanidad() {
   const [newProdUnit, setNewProdUnit] = useState('ml');
   const [newProdNotes, setNewProdNotes] = useState('');
 
+  // Postpone
+  const [postponeId, setPostponeId] = useState<number | null>(null);
+  const [postponeDays, setPostponeDays] = useState('3');
+
   // Filter
-  const [filterTipo, setFilterTipo] = useState<string>('all');
+  const [filterTipo, setFilterTipo] = useState('all');
 
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const today = new Date().toISOString().split('T')[0];
+  const flash = () => { setSaved(true); setTimeout(() => setSaved(false), 3000); };
 
   const loadData = useCallback(async () => {
     try {
-      const [recordsRes, lotsRes, slotsRes, productsRes] = await Promise.all([
+      const [recordsRes, lotsRes, slotsRes, productsRes, confirmRes] = await Promise.all([
         supabase.from('health_records').select('*').order('date', { ascending: false }),
         supabase.from('lots').select('id, code, status').eq('status', 'activo').order('start_date', { ascending: false }),
         supabase.from('cage_slots').select('lot_id, quantity'),
         supabase.from('health_products').select('*').order('name'),
+        supabase.from('treatment_confirmations').select('record_id, date'),
       ]);
       if (recordsRes.data) setRecords(recordsRes.data);
       if (lotsRes.data) setLots(lotsRes.data);
       if (slotsRes.data) setSlots(slotsRes.data);
       if (productsRes.data) setProducts(productsRes.data);
+      if (confirmRes.data) setConfirmations(confirmRes.data);
     } catch (error) {
       console.error('Error cargando sanidad:', error);
     } finally {
@@ -223,20 +245,15 @@ export default function Sanidad() {
   useEffect(() => {
     const product = products.find(p => String(p.id) === productId);
     if (!product) { setDoseCalculated(null); setDoseApplied(''); return; }
-
-    let aves = 0;
-    if (lotId) {
-      aves = slots.filter(s => s.lot_id === Number(lotId)).reduce((s, sl) => s + sl.quantity, 0);
-    } else {
-      aves = slots.reduce((s, sl) => s + sl.quantity, 0);
-    }
-
+    const aves = lotId
+      ? slots.filter(s => s.lot_id === Number(lotId)).reduce((s, sl) => s + sl.quantity, 0)
+      : slots.reduce((s, sl) => s + sl.quantity, 0);
     const calc = Math.round(product.dose_per_bird * aves * 100) / 100;
     setDoseCalculated(calc);
     setDoseApplied(String(calc));
   }, [productId, lotId, products, slots]);
 
-  // Calcular próxima aplicación desde días
+  // Próxima aplicación desde días
   useEffect(() => {
     if (!nextAppDays || isNaN(Number(nextAppDays))) return;
     const d = new Date(date);
@@ -244,12 +261,13 @@ export default function Sanidad() {
     setNextApp(d.toISOString().split('T')[0]);
   }, [nextAppDays, date]);
 
-  const getAvesCount = (lotId: string) => {
-    if (lotId) return slots.filter(s => s.lot_id === Number(lotId)).reduce((s, sl) => s + sl.quantity, 0);
-    return slots.reduce((s, sl) => s + sl.quantity, 0);
-  };
+  const getAvesCount = (lotId: string) =>
+    lotId
+      ? slots.filter(s => s.lot_id === Number(lotId)).reduce((s, sl) => s + sl.quantity, 0)
+      : slots.reduce((s, sl) => s + sl.quantity, 0);
 
   const selectedProduct = products.find(p => String(p.id) === productId);
+  const avesTotal = slots.reduce((s, sl) => s + sl.quantity, 0);
 
   // ── Guardar registro ────────────────────────────────────────────────────────
   const handleSave = async () => {
@@ -268,25 +286,15 @@ export default function Sanidad() {
         dose_calculated: doseCalculated,
         dose_applied: doseApplied ? Number(doseApplied) : null,
         water_liters: waterLiters ? Number(waterLiters) : null,
+        duration_days: durationDays ? Number(durationDays) : null,
       });
-      // Reset form
-      setTipo(TIPOS[0]);
-      setLotId('');
-      setProductId('');
-      setDosis('');
-      setDoseCalculated(null);
-      setDoseApplied('');
-      setWaterLiters('');
-      setNotes('');
-      setNextApp('');
-      setNextAppDays('');
+      setTipo(TIPOS[0]); setLotId(''); setProductId(''); setDosis('');
+      setDoseCalculated(null); setDoseApplied(''); setWaterLiters('');
+      setNotes(''); setNextApp(''); setNextAppDays(''); setDurationDays('');
       setDate(new Date().toISOString().split('T')[0]);
       setShowForm(false);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 3000);
+      flash();
       await loadData();
-    } catch (error) {
-      console.error('Error al guardar:', error);
     } finally {
       setSaving(false);
     }
@@ -299,17 +307,30 @@ export default function Sanidad() {
     await loadData();
   };
 
+  // ── Posponer next_application ───────────────────────────────────────────────
+  const handlePostpone = async (record: HealthRecord) => {
+    if (!record.next_application || !postponeDays) return;
+    setSaving(true);
+    const d = new Date(record.next_application);
+    d.setDate(d.getDate() + Number(postponeDays));
+    await supabase.from('health_records')
+      .update({ next_application: d.toISOString().split('T')[0] })
+      .eq('id', record.id);
+    setPostponeId(null);
+    flash();
+    await loadData();
+    setSaving(false);
+  };
+
   // ── Productos ───────────────────────────────────────────────────────────────
   const handleSaveProduct = async (id: number, data: Partial<HealthProduct>) => {
     await supabase.from('health_products').update(data).eq('id', id);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2500);
+    flash();
     await loadData();
   };
 
   const handleDeleteProduct = async (id: number) => {
     if (!confirm('¿Eliminar este producto?')) return;
-    await supabase.from('health_products').update({ id }).eq('id', id);
     await supabase.from('health_products').delete().eq('id', id);
     await loadData();
   };
@@ -319,16 +340,11 @@ export default function Sanidad() {
     setSaving(true);
     try {
       await supabase.from('health_products').insert({
-        name: newProdName.trim(),
-        type: newProdType,
-        dose_per_bird: Number(newProdDose),
-        unit: newProdUnit,
+        name: newProdName.trim(), type: newProdType,
+        dose_per_bird: Number(newProdDose), unit: newProdUnit,
         notes: newProdNotes.trim() || null,
       });
-      setNewProdName('');
-      setNewProdDose('');
-      setNewProdUnit('ml');
-      setNewProdNotes('');
+      setNewProdName(''); setNewProdDose(''); setNewProdUnit('ml'); setNewProdNotes('');
       setShowNewProduct(false);
       await loadData();
     } finally {
@@ -348,16 +364,15 @@ export default function Sanidad() {
 
   if (!profile) return null;
 
-  // Alertas — próximas aplicaciones vencidas o en ≤3 días
   const pendingAlerts = records.filter(r =>
     r.next_application && nextAppStatus(r.next_application, today) !== 'ok'
   );
 
+  const activeTreatments = records.filter(r => isActiveTreatment(r, today));
+
   const filteredRecords = filterTipo === 'all'
     ? records
     : records.filter(r => r.type === filterTipo);
-
-  const avesTotal = slots.reduce((s, sl) => s + sl.quantity, 0);
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -370,7 +385,48 @@ export default function Sanidad() {
           {saved && <span className="text-green-600 text-sm font-bold animate-pulse">✓ Guardado</span>}
         </div>
 
-        {/* ── Banner de alertas ── */}
+        {/* ── Tratamientos activos ── */}
+        {activeTreatments.length > 0 && (
+          <div className="space-y-2">
+            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Tratamientos en curso</p>
+            {activeTreatments.map(r => {
+              const day = getTreatmentDay(r, today)!;
+              const product = products.find(p => p.id === r.health_product_id);
+              const lot = lots.find(l => l.id === r.lot_id);
+              const confirmedToday = confirmations.some(c => c.record_id === r.id && c.date === today);
+              return (
+                <div key={r.id} className={`rounded-2xl border-2 p-4 transition-all
+                  ${confirmedToday ? 'bg-green-50 border-green-200' : 'bg-blue-50 border-blue-200'}`}>
+                  <div className="flex items-start justify-between mb-2">
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className={`text-[10px] font-black px-2.5 py-1 rounded-full border uppercase ${tipoColor(r.type)}`}>
+                          {r.type}
+                        </span>
+                        <span className="text-[10px] font-bold text-blue-600 bg-white border border-blue-100 px-2 py-0.5 rounded-full">
+                          Día {day} de {r.duration_days}
+                        </span>
+                      </div>
+                      <p className="text-xs text-gray-500 mt-1">{lot ? lot.code : 'Todo el plantel'}</p>
+                    </div>
+                    {confirmedToday
+                      ? <span className="text-[10px] font-black text-green-600 bg-green-100 px-2 py-1 rounded-full">✓ Aplicado</span>
+                      : <span className="text-[10px] font-black text-blue-600 bg-blue-100 px-2 py-1 rounded-full">Pendiente</span>
+                    }
+                  </div>
+                  {product && r.dose_applied !== null && (
+                    <div className="bg-white rounded-xl px-3 py-2 text-xs text-blue-700 font-medium border border-blue-100">
+                      <span className="font-black">{r.dose_applied} {product.unit}</span>
+                      {r.water_liters ? ` · ${(r.dose_applied / r.water_liters).toFixed(2)} ${product.unit}/litro` : ''}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* ── Banner alertas próximas aplicaciones ── */}
         {pendingAlerts.length > 0 && (
           <div className="space-y-2">
             {pendingAlerts.map(r => {
@@ -378,19 +434,41 @@ export default function Sanidad() {
               const lot = lots.find(l => l.id === r.lot_id);
               return (
                 <div key={r.id}
-                  className={`flex items-start gap-3 rounded-2xl px-4 py-3 border
-                    ${status === 'overdue'
-                      ? 'bg-red-50 border-red-200'
-                      : 'bg-amber-50 border-amber-200'}`}>
-                  <AlertTriangle className={`w-4 h-4 shrink-0 mt-0.5 ${status === 'overdue' ? 'text-red-500' : 'text-amber-500'}`} />
-                  <div className="flex-1">
-                    <p className={`text-sm font-bold ${status === 'overdue' ? 'text-red-700' : 'text-amber-700'}`}>
-                      {status === 'overdue' ? 'Aplicación vencida' : 'Aplicación próxima'} — {r.type}
-                    </p>
-                    <p className="text-xs text-gray-500 mt-0.5">
-                      {lot ? lot.code : 'Todo el plantel'} ·{' '}
-                      {new Date(r.next_application! + 'T12:00:00').toLocaleDateString('es-AR')}
-                    </p>
+                  className={`rounded-2xl px-4 py-3 border
+                    ${status === 'overdue' ? 'bg-red-50 border-red-200' : 'bg-amber-50 border-amber-200'}`}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-start gap-2 flex-1">
+                      <AlertTriangle className={`w-4 h-4 shrink-0 mt-0.5 ${status === 'overdue' ? 'text-red-500' : 'text-amber-500'}`} />
+                      <div>
+                        <p className={`text-sm font-bold ${status === 'overdue' ? 'text-red-700' : 'text-amber-700'}`}>
+                          {status === 'overdue' ? 'Aplicación vencida' : 'Aplicación próxima'} — {r.type}
+                        </p>
+                        <p className="text-xs text-gray-500 mt-0.5">
+                          {lot ? lot.code : 'Todo el plantel'} · {new Date(r.next_application! + 'T12:00:00').toLocaleDateString('es-AR')}
+                        </p>
+                      </div>
+                    </div>
+                    {/* Posponer */}
+                    {postponeId === r.id ? (
+                      <div className="flex items-center gap-2 shrink-0">
+                        <input type="number" min={1} max={30}
+                          className="w-14 text-center input-base py-1 text-sm"
+                          value={postponeDays} onChange={e => setPostponeDays(e.target.value)} />
+                        <span className="text-xs text-gray-400">días</span>
+                        <button onClick={() => handlePostpone(r)} disabled={saving}
+                          className="text-xs font-bold bg-amber-500 text-white px-3 py-1.5 rounded-xl hover:bg-amber-600 transition-colors">
+                          OK
+                        </button>
+                        <button onClick={() => setPostponeId(null)}>
+                          <X className="w-4 h-4 text-gray-400" />
+                        </button>
+                      </div>
+                    ) : (
+                      <button onClick={() => setPostponeId(r.id)}
+                        className="flex items-center gap-1 text-xs font-bold text-gray-500 bg-white border border-gray-200 px-3 py-1.5 rounded-xl hover:border-amber-300 transition-colors shrink-0">
+                        <SkipForward className="w-3.5 h-3.5" /> Posponer
+                      </button>
+                    )}
                   </div>
                 </div>
               );
@@ -421,7 +499,7 @@ export default function Sanidad() {
                 </select>
               </div>
               <div>
-                <label className="text-[10px] font-black text-gray-400 uppercase ml-1">Fecha</label>
+                <label className="text-[10px] font-black text-gray-400 uppercase ml-1">Fecha inicio</label>
                 <input className="input-base mt-1" type="date" value={date} onChange={e => setDate(e.target.value)} />
               </div>
             </div>
@@ -437,95 +515,99 @@ export default function Sanidad() {
               </select>
             </div>
 
-            {/* Calculadora de dosis */}
-            <div className="space-y-3">
-              <div>
-                <label className="text-[10px] font-black text-gray-400 uppercase ml-1">Producto</label>
-                <select className="input-base mt-1" value={productId} onChange={e => setProductId(e.target.value)}>
-                  <option value="">Sin producto registrado</option>
-                  {products.map(p => <option key={p.id} value={p.id}>{p.name} ({p.dose_per_bird} {p.unit}/ave)</option>)}
-                </select>
-              </div>
-
-              {selectedProduct && doseCalculated !== null && (
-                <div className="bg-blue-50 border border-blue-100 rounded-2xl p-4 space-y-3">
-                  <div className="flex items-center gap-2">
-                    <FlaskConical className="w-4 h-4 text-blue-500" />
-                    <p className="text-xs font-bold text-blue-700 uppercase">Calculadora de dosis</p>
-                  </div>
-
-                  <div className="grid grid-cols-3 gap-2 text-center">
-                    <div className="bg-white rounded-xl p-2 border border-blue-100">
-                      <p className="text-[9px] text-blue-400 font-bold uppercase">Aves</p>
-                      <p className="text-lg font-black text-blue-700">{getAvesCount(lotId)}</p>
-                    </div>
-                    <div className="bg-white rounded-xl p-2 border border-blue-100">
-                      <p className="text-[9px] text-blue-400 font-bold uppercase">Por ave</p>
-                      <p className="text-lg font-black text-blue-700">{selectedProduct.dose_per_bird}{selectedProduct.unit}</p>
-                    </div>
-                    <div className="bg-yellow-50 rounded-xl p-2 border border-yellow-200">
-                      <p className="text-[9px] text-yellow-600 font-bold uppercase">Total</p>
-                      <p className="text-lg font-black text-yellow-700">{doseCalculated}{selectedProduct.unit}</p>
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="text-[10px] font-bold text-blue-600 uppercase ml-1">
-                      Dosis a aplicar (editable)
-                    </label>
-                    <div className="flex items-center gap-2 mt-1">
-                      <input className="input-base text-center font-bold" type="number" min={0} step={0.01}
-                        value={doseApplied} onChange={e => setDoseApplied(e.target.value)} />
-                      <span className="text-sm font-bold text-gray-500 shrink-0">{selectedProduct.unit}</span>
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="text-[10px] font-bold text-blue-600 uppercase ml-1">
-                      Litros de agua (opcional)
-                    </label>
-                    <div className="flex items-center gap-2 mt-1">
-                      <input className="input-base text-center font-bold" type="number" min={0} step={0.5}
-                        placeholder="0"
-                        value={waterLiters} onChange={e => setWaterLiters(e.target.value)} />
-                      <span className="text-sm font-bold text-gray-500 shrink-0">litros</span>
-                    </div>
-                    {waterLiters && Number(waterLiters) > 0 && doseApplied && (
-                      <div className="mt-2 bg-white border border-blue-100 rounded-xl px-3 py-2 text-center">
-                        <p className="text-xs font-bold text-blue-700">
-                          {(Number(doseApplied) / Number(waterLiters)).toFixed(2)} {selectedProduct.unit} por litro de agua
-                        </p>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* Dosis libre si no hay producto */}
-              {!selectedProduct && (
-                <div>
-                  <label className="text-[10px] font-black text-gray-400 uppercase ml-1">Dosis (texto libre)</label>
-                  <input className="input-base mt-1" placeholder="Ej: 2ml / litro"
-                    value={dosis} onChange={e => setDosis(e.target.value)} />
-                </div>
+            {/* Días de tratamiento */}
+            <div>
+              <label className="text-[10px] font-black text-gray-400 uppercase ml-1">
+                Duración del tratamiento (días) — opcional
+              </label>
+              <input className="input-base mt-1" type="number" min={1} max={30}
+                placeholder="Ej: 5 — dejá vacío si es aplicación única"
+                value={durationDays} onChange={e => setDurationDays(e.target.value)} />
+              {durationDays && Number(durationDays) > 0 && (
+                <p className="text-[10px] text-blue-500 mt-1 ml-1">
+                  Aparecerá en el dashboard de la colaboradora del {new Date(date + 'T12:00:00').toLocaleDateString('es-AR')} al{' '}
+                  {(() => {
+                    const end = new Date(date);
+                    end.setDate(end.getDate() + Number(durationDays) - 1);
+                    return end.toLocaleDateString('es-AR');
+                  })()}
+                </p>
               )}
             </div>
+
+            {/* Producto y calculadora */}
+            <div>
+              <label className="text-[10px] font-black text-gray-400 uppercase ml-1">Producto</label>
+              <select className="input-base mt-1" value={productId} onChange={e => setProductId(e.target.value)}>
+                <option value="">Sin producto registrado</option>
+                {products.map(p => <option key={p.id} value={p.id}>{p.name} ({p.dose_per_bird} {p.unit}/ave)</option>)}
+              </select>
+            </div>
+
+            {selectedProduct && doseCalculated !== null && (
+              <div className="bg-blue-50 border border-blue-100 rounded-2xl p-4 space-y-3">
+                <div className="flex items-center gap-2">
+                  <FlaskConical className="w-4 h-4 text-blue-500" />
+                  <p className="text-xs font-bold text-blue-700 uppercase">Calculadora de dosis</p>
+                </div>
+                <div className="grid grid-cols-3 gap-2 text-center">
+                  <div className="bg-white rounded-xl p-2 border border-blue-100">
+                    <p className="text-[9px] text-blue-400 font-bold uppercase">Aves</p>
+                    <p className="text-lg font-black text-blue-700">{getAvesCount(lotId)}</p>
+                  </div>
+                  <div className="bg-white rounded-xl p-2 border border-blue-100">
+                    <p className="text-[9px] text-blue-400 font-bold uppercase">Por ave</p>
+                    <p className="text-lg font-black text-blue-700">{selectedProduct.dose_per_bird}{selectedProduct.unit}</p>
+                  </div>
+                  <div className="bg-yellow-50 rounded-xl p-2 border border-yellow-200">
+                    <p className="text-[9px] text-yellow-600 font-bold uppercase">Total</p>
+                    <p className="text-lg font-black text-yellow-700">{doseCalculated}{selectedProduct.unit}</p>
+                  </div>
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-blue-600 uppercase ml-1">Dosis a aplicar (editable)</label>
+                  <div className="flex items-center gap-2 mt-1">
+                    <input className="input-base text-center font-bold" type="number" min={0} step={0.01}
+                      value={doseApplied} onChange={e => setDoseApplied(e.target.value)} />
+                    <span className="text-sm font-bold text-gray-500 shrink-0">{selectedProduct.unit}</span>
+                  </div>
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold text-blue-600 uppercase ml-1">Litros de agua (opcional)</label>
+                  <div className="flex items-center gap-2 mt-1">
+                    <input className="input-base text-center font-bold" type="number" min={0} step={0.5}
+                      placeholder="0" value={waterLiters} onChange={e => setWaterLiters(e.target.value)} />
+                    <span className="text-sm font-bold text-gray-500 shrink-0">litros</span>
+                  </div>
+                  {waterLiters && Number(waterLiters) > 0 && doseApplied && (
+                    <div className="mt-2 bg-white border border-blue-100 rounded-xl px-3 py-2 text-center">
+                      <p className="text-xs font-bold text-blue-700">
+                        {(Number(doseApplied) / Number(waterLiters)).toFixed(2)} {selectedProduct.unit} por litro de agua
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {!selectedProduct && (
+              <div>
+                <label className="text-[10px] font-black text-gray-400 uppercase ml-1">Dosis (texto libre)</label>
+                <input className="input-base mt-1" placeholder="Ej: 2ml / litro"
+                  value={dosis} onChange={e => setDosis(e.target.value)} />
+              </div>
+            )}
 
             {/* Próxima aplicación */}
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="text-[10px] font-black text-gray-400 uppercase ml-1">
-                  Próx. aplicación en días
-                </label>
-                <input className="input-base mt-1" type="number" min={1} placeholder="Ej: 7"
+                <label className="text-[10px] font-black text-gray-400 uppercase ml-1">Próx. aplicación en días</label>
+                <input className="input-base mt-1" type="number" min={1} placeholder="Ej: 14"
                   value={nextAppDays} onChange={e => setNextAppDays(e.target.value)} />
               </div>
               <div>
-                <label className="text-[10px] font-black text-gray-400 uppercase ml-1">
-                  Fecha calculada
-                </label>
-                <input className="input-base mt-1" type="date"
-                  value={nextApp} onChange={e => setNextApp(e.target.value)} />
+                <label className="text-[10px] font-black text-gray-400 uppercase ml-1">Fecha calculada</label>
+                <input className="input-base mt-1" type="date" value={nextApp} onChange={e => setNextApp(e.target.value)} />
               </div>
             </div>
 
@@ -541,12 +623,10 @@ export default function Sanidad() {
           </div>
         )}
 
-        {/* ── Gestión de productos ── */}
+        {/* ── Productos registrados ── */}
         <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden">
-          <button
-            onClick={() => setShowProducts(p => !p)}
-            className="w-full flex items-center justify-between px-5 py-4 hover:bg-gray-50 transition-colors"
-          >
+          <button onClick={() => setShowProducts(p => !p)}
+            className="w-full flex items-center justify-between px-5 py-4 hover:bg-gray-50 transition-colors">
             <div className="flex items-center gap-2">
               <FlaskConical className="w-4 h-4 text-gray-400" />
               <span className="text-sm font-bold text-gray-600">Productos registrados</span>
@@ -560,7 +640,6 @@ export default function Sanidad() {
               {products.map(p => (
                 <ProductCard key={p.id} product={p} onSave={handleSaveProduct} onDelete={handleDeleteProduct} />
               ))}
-
               {!showNewProduct ? (
                 <button onClick={() => setShowNewProduct(true)}
                   className="w-full py-3 rounded-2xl border-2 border-dashed border-gray-200 text-gray-400 text-xs font-bold uppercase hover:border-yellow-300 hover:text-yellow-500 transition-all flex items-center justify-center gap-2">
@@ -588,13 +667,11 @@ export default function Sanidad() {
                     </div>
                   </div>
                   <div>
-                    <label className="text-[10px] font-bold text-gray-400 uppercase ml-1">
-                      Dosis por ave ({newProdUnit})
-                    </label>
+                    <label className="text-[10px] font-bold text-gray-400 uppercase ml-1">Dosis por ave ({newProdUnit})</label>
                     <input className="input-base mt-1" type="number" min={0} step={0.001} placeholder="0.02"
                       value={newProdDose} onChange={e => setNewProdDose(e.target.value)} />
                   </div>
-                  <input className="input-base" placeholder="Notas del producto (opcional)"
+                  <input className="input-base" placeholder="Notas (opcional)"
                     value={newProdNotes} onChange={e => setNewProdNotes(e.target.value)} />
                   <button onClick={handleNewProduct} disabled={saving || !newProdName.trim() || !newProdDose}
                     className="btn-primary w-full py-3 text-sm disabled:opacity-40">
@@ -610,11 +687,8 @@ export default function Sanidad() {
         <div className="space-y-4">
           <div className="flex items-center justify-between ml-1">
             <h3 className="text-xs font-black text-gray-400 uppercase tracking-widest">Historial</h3>
-            <select
-              value={filterTipo}
-              onChange={e => setFilterTipo(e.target.value)}
-              className="text-xs font-bold text-gray-500 bg-white border border-gray-200 rounded-xl px-3 py-1.5 outline-none focus:border-yellow-400"
-            >
+            <select value={filterTipo} onChange={e => setFilterTipo(e.target.value)}
+              className="text-xs font-bold text-gray-500 bg-white border border-gray-200 rounded-xl px-3 py-1.5 outline-none focus:border-yellow-400">
               <option value="all">Todos los tipos</option>
               {TIPOS.map(t => <option key={t} value={t}>{t}</option>)}
             </select>
@@ -630,6 +704,7 @@ export default function Sanidad() {
               const lot = lots.find(l => l.id === r.lot_id);
               const product = products.find(p => p.id === r.health_product_id);
               const alertStatus = r.next_application ? nextAppStatus(r.next_application, today) : null;
+              const treatmentDay = getTreatmentDay(r, today);
 
               return (
                 <div key={r.id} className="bg-white rounded-3xl border border-gray-100 p-5 shadow-sm">
@@ -641,6 +716,12 @@ export default function Sanidad() {
                       <span className="text-[10px] font-black px-2.5 py-1 rounded-full border border-gray-100 bg-gray-50 text-gray-500 uppercase tracking-tighter">
                         {lot ? lot.code : 'Todo el plantel'}
                       </span>
+                      {r.duration_days && (
+                        <span className={`text-[10px] font-black px-2.5 py-1 rounded-full border uppercase
+                          ${treatmentDay ? 'bg-blue-100 border-blue-200 text-blue-700' : 'bg-gray-100 border-gray-200 text-gray-500'}`}>
+                          {treatmentDay ? `Día ${treatmentDay}/${r.duration_days}` : `${r.duration_days} días`}
+                        </span>
+                      )}
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="text-[10px] font-bold text-gray-400 bg-gray-50 px-2 py-1 rounded-lg">
@@ -654,45 +735,40 @@ export default function Sanidad() {
                   </div>
 
                   <div className="space-y-2">
-                    {/* Producto y dosis aplicada */}
                     {product && r.dose_applied !== null && (
                       <div className="flex items-center gap-2 bg-blue-50 border border-blue-100 rounded-2xl px-3 py-2">
                         <FlaskConical className="w-4 h-4 text-blue-400 shrink-0" />
-                        <div className="flex-1">
+                        <div>
                           <p className="text-xs font-bold text-blue-700">{product.name}</p>
                           <p className="text-xs text-blue-500">
-                            {r.dose_applied} {product.unit} aplicados
+                            {r.dose_applied} {product.unit}
                             {r.water_liters ? ` · ${(r.dose_applied / r.water_liters).toFixed(2)} ${product.unit}/litro` : ''}
                           </p>
                         </div>
                       </div>
                     )}
-
-                    {/* Dosis texto libre */}
                     {!product && r.dosis && (
                       <div className="flex items-center gap-2 text-sm text-gray-700">
                         <Beaker className="w-4 h-4 text-gray-300" />
                         <span className="font-medium">{r.dosis}</span>
                       </div>
                     )}
-
                     {r.notes && (
                       <p className="text-sm text-gray-600 leading-relaxed bg-gray-50/50 p-3 rounded-2xl italic">"{r.notes}"</p>
                     )}
-
                     {r.next_application && (
-                      <div className={`flex items-center gap-2 text-xs font-bold p-3 rounded-2xl border
-                        ${alertStatus === 'overdue'
-                          ? 'bg-red-50 border-red-200 text-red-600'
-                          : alertStatus === 'soon'
-                            ? 'bg-amber-50 border-amber-200 text-amber-700'
-                            : 'bg-blue-50 border-blue-100 text-blue-600'}`}>
-                        <Calendar className="w-4 h-4 shrink-0" />
-                        <span>
-                          {alertStatus === 'overdue' && '⚠ Vencida — '}
-                          {alertStatus === 'soon' && '⏰ Próxima — '}
-                          Próxima aplicación: {new Date(r.next_application + 'T12:00:00').toLocaleDateString('es-AR')}
-                        </span>
+                      <div className={`flex items-center justify-between gap-2 text-xs font-bold p-3 rounded-2xl border
+                        ${alertStatus === 'overdue' ? 'bg-red-50 border-red-200 text-red-600'
+                          : alertStatus === 'soon' ? 'bg-amber-50 border-amber-200 text-amber-700'
+                          : 'bg-blue-50 border-blue-100 text-blue-600'}`}>
+                        <div className="flex items-center gap-2">
+                          <Calendar className="w-4 h-4 shrink-0" />
+                          <span>
+                            {alertStatus === 'overdue' && '⚠ Vencida — '}
+                            {alertStatus === 'soon' && '⏰ Próxima — '}
+                            {new Date(r.next_application + 'T12:00:00').toLocaleDateString('es-AR')}
+                          </span>
+                        </div>
                       </div>
                     )}
                   </div>
