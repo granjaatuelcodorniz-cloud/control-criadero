@@ -1,63 +1,76 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import Header from '@/components/Header';
-import { ChevronDown } from 'lucide-react';
+import { ChevronDown, AlertCircle } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useRouter } from 'next/navigation';
 
-function Counter({ label, value, onChange, sublabel }: {
+// ─── Counter ──────────────────────────────────────────────────────────────────
+
+function Counter({
+  label,
+  value,
+  onChange,
+  sublabel,
+}: {
   label: string;
   value: number | null;
   onChange: (v: number) => void;
   sublabel?: string;
 }) {
-  const [editing, setEditing] = useState(false);
-  const [raw, setRaw] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [focused, setFocused] = useState(false);
+
+  // Cuando entra en foco, selecciona todo el texto
+  const handleFocus = () => {
+    setFocused(true);
+    setTimeout(() => inputRef.current?.select(), 0);
+  };
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    if (val === '' || val === '-') return;
+    const parsed = parseInt(val, 10);
+    if (!isNaN(parsed) && parsed >= 0) onChange(parsed);
+  };
+
+  const handleBlur = () => {
+    setFocused(false);
+    if (value === null) onChange(0);
+  };
+
+  const displayValue = value === null ? '0' : String(value);
 
   return (
     <div className="flex flex-col gap-1.5">
       <div>
         <label className="text-sm font-medium text-gray-600">{label}</label>
-        {sublabel && <p className="text-xs text-gray-400">{sublabel}</p>}
+        {sublabel && <p className="text-xs text-gray-400 mt-0.5">{sublabel}</p>}
       </div>
-      <div className="bg-gray-50 rounded-2xl border border-gray-200 flex items-center justify-between px-2 py-2 gap-2">
+      <div className={`bg-gray-50 rounded-2xl border flex items-center justify-between px-2 py-2 gap-2 transition-colors
+        ${focused ? 'border-yellow-400 bg-white' : 'border-gray-200'}`}>
         <button
           type="button"
           onClick={() => onChange(Math.max(0, (value ?? 0) - 1))}
           className="w-14 h-14 rounded-xl bg-white border border-gray-200 text-3xl font-light text-gray-500 active:scale-95 active:bg-gray-100 transition-all flex items-center justify-center select-none"
         >−</button>
 
-        {editing ? (
-          <input
-            type="number"
-            inputMode="numeric"
-            className="flex-1 text-center text-5xl font-bold text-gray-900 outline-none bg-transparent"
-            value={raw}
-            autoFocus
-            onChange={e => setRaw(e.target.value)}
-            onBlur={() => {
-              const parsed = parseInt(raw);
-              onChange(isNaN(parsed) || parsed < 0 ? 0 : parsed);
-              setEditing(false);
-            }}
-            onKeyDown={e => {
-              if (e.key === 'Enter') {
-                const parsed = parseInt(raw);
-                onChange(isNaN(parsed) || parsed < 0 ? 0 : parsed);
-                setEditing(false);
-              }
-            }}
-          />
-        ) : (
-          <span
-            className="flex-1 text-center text-5xl font-bold text-gray-900 cursor-pointer py-2 select-none"
-            onClick={() => { setRaw(value === null ? '' : String(value)); setEditing(true); }}
-          >
-            {value === null ? <span className="text-gray-300 text-4xl">—</span> : value}
-          </span>
-        )}
+        {/* Input siempre en el DOM — sin montaje/desmontaje, el cursor no se escapa */}
+        <input
+          ref={inputRef}
+          type="number"
+          inputMode="numeric"
+          min={0}
+          value={displayValue}
+          onChange={handleChange}
+          onFocus={handleFocus}
+          onBlur={handleBlur}
+          onKeyDown={e => { if (e.key === 'Enter') inputRef.current?.blur(); }}
+          className="flex-1 text-center text-5xl font-bold text-gray-900 outline-none bg-transparent
+            [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+        />
 
         <button
           type="button"
@@ -69,13 +82,17 @@ function Counter({ label, value, onChange, sublabel }: {
   );
 }
 
+// ─── DatePicker ───────────────────────────────────────────────────────────────
+
 function DatePicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   const [open, setOpen] = useState(false);
   const today = new Date().toISOString().split('T')[0];
   const isToday = value === today;
   const label = isToday
     ? 'Hoy'
-    : new Date(value + 'T12:00:00').toLocaleDateString('es-AR', { weekday: 'long', day: 'numeric', month: 'long' });
+    : new Date(value + 'T12:00:00').toLocaleDateString('es-AR', {
+        weekday: 'long', day: 'numeric', month: 'long',
+      });
 
   return (
     <div>
@@ -94,37 +111,92 @@ function DatePicker({ value, onChange }: { value: string; onChange: (v: string) 
   );
 }
 
+// ─── Toast ────────────────────────────────────────────────────────────────────
+
+function Toast({ message, visible }: { message: string; visible: boolean }) {
+  return (
+    <div className={`fixed top-4 left-1/2 -translate-x-1/2 z-50 transition-all duration-300
+      ${visible ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-2 pointer-events-none'}`}>
+      <div className="bg-green-500 text-white px-5 py-3 rounded-2xl shadow-lg font-medium text-sm flex items-center gap-2">
+        ✓ {message}
+      </div>
+    </div>
+  );
+}
+
+// ─── Main Page ────────────────────────────────────────────────────────────────
+
 export default function RegistroHuevos() {
   const { user, profile, loading: authLoading } = useAuth();
   const router = useRouter();
 
   const [activeTab, setActiveTab] = useState<'consumo' | 'fertiles'>('consumo');
 
+  // Consumo
   const [dateConsumo, setDateConsumo] = useState(new Date().toISOString().split('T')[0]);
   const [bandejas, setBandejas] = useState<number | null>(null);
   const [bandFertiles, setBandFertiles] = useState<number | null>(null);
   const [docenas, setDocenas] = useState<number | null>(null);
   const [rotos, setRotos] = useState<number | null>(null);
   const [notasConsumo, setNotasConsumo] = useState('');
+  const [existeConsumo, setExisteConsumo] = useState(false);
 
+  // Fértiles
   const [dateFertiles, setDateFertiles] = useState(new Date().toISOString().split('T')[0]);
   const [bandProcesadas, setBandProcesadas] = useState<number | null>(null);
   const [docenasFertiles, setDocenasFertiles] = useState<number | null>(null);
   const [descarte, setDescarte] = useState<number | null>(null);
   const [notasFertiles, setNotasFertiles] = useState('');
+  const [existeFertiles, setExisteFertiles] = useState(false);
 
   const [loading, setLoading] = useState(false);
-  const [success, setSuccess] = useState('');
+  const [toast, setToast] = useState('');
+  const [toastVisible, setToastVisible] = useState(false);
+
+  const showToast = (msg: string) => {
+    setToast(msg);
+    setToastVisible(true);
+    setTimeout(() => setToastVisible(false), 3000);
+  };
+
+  // Verificar si ya existe registro para la fecha seleccionada
+  const checkExistingConsumo = useCallback(async (date: string) => {
+    if (!user) return;
+    const { data } = await supabase
+      .from('daily_records')
+      .select('id')
+      .eq('date', date)
+      .eq('user_id', user.id)
+      .maybeSingle();
+    setExisteConsumo(!!data);
+  }, [user]);
+
+  const checkExistingFertiles = useCallback(async (date: string) => {
+    if (!user) return;
+    const { data } = await supabase
+      .from('fertile_records')
+      .select('id')
+      .eq('date', date)
+      .eq('user_id', user.id)
+      .maybeSingle();
+    setExisteFertiles(!!data);
+  }, [user]);
 
   useEffect(() => {
-    if (!authLoading && !user) {
-      router.push('/');
-    }
+    if (!authLoading && !user) router.push('/');
   }, [user, authLoading, router]);
+
+  useEffect(() => {
+    checkExistingConsumo(dateConsumo);
+  }, [dateConsumo, checkExistingConsumo]);
+
+  useEffect(() => {
+    checkExistingFertiles(dateFertiles);
+  }, [dateFertiles, checkExistingFertiles]);
 
   if (authLoading) return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-      <p className="text-gray-400">Cargando...</p>
+      <div className="w-10 h-10 border-4 border-yellow-400 border-t-transparent rounded-full animate-spin" />
     </div>
   );
 
@@ -132,8 +204,13 @@ export default function RegistroHuevos() {
 
   const isOwner = profile.role === 'owner';
 
+  // Validación: al menos un campo > 0
+  const consumoValido = (bandejas ?? 0) > 0 || (bandFertiles ?? 0) > 0 || (docenas ?? 0) > 0 || (rotos ?? 0) > 0;
+  const fertilesValido = (bandProcesadas ?? 0) > 0 || (docenasFertiles ?? 0) > 0 || (descarte ?? 0) > 0;
+
   const handleSubmitConsumo = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!consumoValido || !user) return;
     setLoading(true);
     const now = new Date();
     const { error } = await supabase.from('daily_records').insert({
@@ -148,14 +225,14 @@ export default function RegistroHuevos() {
     });
 
     if (!error) {
-      setSuccess('consumo');
+      showToast('Registro de consumo guardado');
       setBandejas(null);
       setBandFertiles(null);
       setDocenas(null);
       setRotos(null);
       setNotasConsumo('');
       setDateConsumo(new Date().toISOString().split('T')[0]);
-      setTimeout(() => setSuccess(''), 3000);
+      setExisteConsumo(true);
     } else {
       alert('Error al guardar: ' + error.message);
     }
@@ -164,6 +241,7 @@ export default function RegistroHuevos() {
 
   const handleSubmitFertiles = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!fertilesValido || !user) return;
     setLoading(true);
     const now = new Date();
     const { error } = await supabase.from('fertile_records').insert({
@@ -177,13 +255,13 @@ export default function RegistroHuevos() {
     });
 
     if (!error) {
-      setSuccess('fertiles');
+      showToast('Registro de fértiles guardado');
       setBandProcesadas(null);
       setDocenasFertiles(null);
       setDescarte(null);
       setNotasFertiles('');
       setDateFertiles(new Date().toISOString().split('T')[0]);
-      setTimeout(() => setSuccess(''), 3000);
+      setExisteFertiles(true);
     } else {
       alert('Error al guardar: ' + error.message);
     }
@@ -192,6 +270,8 @@ export default function RegistroHuevos() {
 
   return (
     <div className="min-h-screen bg-gray-50">
+      <Toast message={toast} visible={toastVisible} />
+
       <Header
         userName={profile.full_name}
         role={profile.role}
@@ -209,62 +289,121 @@ export default function RegistroHuevos() {
             {(['consumo', 'fertiles'] as const).map(tab => (
               <button key={tab} onClick={() => setActiveTab(tab)}
                 className={`flex-1 py-2.5 rounded-xl text-sm font-medium transition-all border
-                  ${activeTab === tab ? 'bg-yellow-400 border-yellow-400 text-gray-900' : 'bg-white border-gray-200 text-gray-500'}`}>
+                  ${activeTab === tab
+                    ? 'bg-yellow-400 border-yellow-400 text-gray-900'
+                    : 'bg-white border-gray-200 text-gray-500'}`}>
                 {tab === 'consumo' ? 'Consumo' : 'Fértiles'}
               </button>
             ))}
           </div>
         )}
 
+        {/* ── Formulario Consumo ── */}
         {(activeTab === 'consumo' || !isOwner) && (
           <form onSubmit={handleSubmitConsumo} className="space-y-4">
-            <div className="card"><DatePicker value={dateConsumo} onChange={setDateConsumo} /></div>
+
+            <div className="card">
+              <DatePicker value={dateConsumo} onChange={setDateConsumo} />
+            </div>
+
+            {/* Aviso registro duplicado */}
+            {existeConsumo && (
+              <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3">
+                <AlertCircle className="w-4 h-4 text-amber-500 shrink-0" />
+                <p className="text-sm text-amber-700 font-medium">
+                  Ya existe un registro de consumo para este día. Podés igualmente guardar otro.
+                </p>
+              </div>
+            )}
+
             <div className="card space-y-5">
               <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Recolección</p>
               <Counter label="Bandejas de consumo" value={bandejas} onChange={setBandejas} />
-              <Counter label="Bandejas de fértiles" sublabel="Recolectadas — el empaque lo completás vos" value={bandFertiles} onChange={setBandFertiles} />
+              <Counter label="Bandejas de fértiles" value={bandFertiles} onChange={setBandFertiles} />
             </div>
+
             <div className="card space-y-5">
               <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Empaque consumo</p>
               <Counter label="Docenas armadas" value={docenas} onChange={setDocenas} />
               <Counter label="Huevos rotos / descartados" sublabel="Unidades" value={rotos} onChange={setRotos} />
             </div>
+
             <div className="card">
               <label className="text-sm font-medium text-gray-500 mb-2 block">Notas opcionales</label>
-              <textarea value={notasConsumo} onChange={e => setNotasConsumo(e.target.value)} rows={3}
-                className="input-base resize-none" placeholder="Alguna observación del día..." />
+              <textarea
+                value={notasConsumo}
+                onChange={e => setNotasConsumo(e.target.value)}
+                rows={3}
+                className="input-base resize-none"
+                placeholder="Alguna observación del día..."
+              />
             </div>
-            {success === 'consumo' && (
-              <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-2xl text-center text-sm font-medium">
-                ✓ Registro guardado correctamente
-              </div>
-            )}
-            <button type="submit" disabled={loading} className="btn-primary w-full py-4 text-base">
+
+            <button
+              type="submit"
+              disabled={loading || !consumoValido}
+              className="btn-primary w-full py-4 text-base disabled:opacity-40 disabled:cursor-not-allowed"
+            >
               {loading ? 'Guardando...' : 'Guardar registro'}
             </button>
           </form>
         )}
 
+        {/* ── Formulario Fértiles (solo owner) ── */}
         {isOwner && activeTab === 'fertiles' && (
           <form onSubmit={handleSubmitFertiles} className="space-y-4">
-            <div className="card"><DatePicker value={dateFertiles} onChange={setDateFertiles} /></div>
-            <div className="card space-y-5">
-              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Empaque fértiles</p>
-              <Counter label="Bandejas procesadas" sublabel="Las que entraron al proceso de selección" value={bandProcesadas} onChange={setBandProcesadas} />
-              <Counter label="Docenas seleccionadas" sublabel="Las que quedaron aptas" value={docenasFertiles} onChange={setDocenasFertiles} />
-              <Counter label="Descarte" sublabel="Rotos + no seleccionados (unidades)" value={descarte} onChange={setDescarte} />
-            </div>
+
             <div className="card">
-              <label className="text-sm font-medium text-gray-500 mb-2 block">Notas opcionales</label>
-              <textarea value={notasFertiles} onChange={e => setNotasFertiles(e.target.value)} rows={3}
-                className="input-base resize-none" placeholder="Observaciones del empaque..." />
+              <DatePicker value={dateFertiles} onChange={setDateFertiles} />
             </div>
-            {success === 'fertiles' && (
-              <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-2xl text-center text-sm font-medium">
-                ✓ Registro guardado correctamente
+
+            {existeFertiles && (
+              <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3">
+                <AlertCircle className="w-4 h-4 text-amber-500 shrink-0" />
+                <p className="text-sm text-amber-700 font-medium">
+                  Ya existe un registro de fértiles para este día. Podés igualmente guardar otro.
+                </p>
               </div>
             )}
-            <button type="submit" disabled={loading} className="btn-primary w-full py-4 text-base">
+
+            <div className="card space-y-5">
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Empaque fértiles</p>
+              <Counter
+                label="Bandejas procesadas"
+                sublabel="Las que entraron al proceso de selección"
+                value={bandProcesadas}
+                onChange={setBandProcesadas}
+              />
+              <Counter
+                label="Docenas seleccionadas"
+                sublabel="Las que quedaron aptas"
+                value={docenasFertiles}
+                onChange={setDocenasFertiles}
+              />
+              <Counter
+                label="Descarte"
+                sublabel="Rotos + no seleccionados (unidades)"
+                value={descarte}
+                onChange={setDescarte}
+              />
+            </div>
+
+            <div className="card">
+              <label className="text-sm font-medium text-gray-500 mb-2 block">Notas opcionales</label>
+              <textarea
+                value={notasFertiles}
+                onChange={e => setNotasFertiles(e.target.value)}
+                rows={3}
+                className="input-base resize-none"
+                placeholder="Observaciones del empaque..."
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={loading || !fertilesValido}
+              className="btn-primary w-full py-4 text-base disabled:opacity-40 disabled:cursor-not-allowed"
+            >
               {loading ? 'Guardando...' : 'Guardar empaque fértiles'}
             </button>
           </form>
