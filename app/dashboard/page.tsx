@@ -18,6 +18,7 @@ type Task = {
   description: string;
   type: 'daily' | 'periodic' | 'custom';
   frequency_days?: number;
+  next_execution?: string | null;
   is_urgent?: boolean;
 };
 
@@ -30,6 +31,14 @@ type StockItem = {
   bolsas_restantes?: number | null;
   kg_por_bolsa?: number | null;
 };
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+// Calcula si una periódica está vencida (next_execution < hoy)
+function isOverdue(task: Task, today: string): boolean {
+  if (!task.next_execution) return false;
+  return task.next_execution < today;
+}
 
 // ─── Main Dashboard ───────────────────────────────────────────────────────────
 
@@ -56,14 +65,42 @@ export default function Dashboard() {
   const loadData = useCallback(async () => {
     if (!user) return;
     try {
+      // 1. Limpiar tareas custom completadas en días anteriores
+      const { data: oldCustomCompletions } = await supabase
+        .from('task_completions')
+        .select('task_id')
+        .eq('user_id', user.id)
+        .lt('date', today);
+
+      if (oldCustomCompletions && oldCustomCompletions.length > 0) {
+        const oldIds = oldCustomCompletions.map(c => c.task_id);
+        // Desactivar solo las custom que fueron completadas antes de hoy
+        await supabase
+          .from('tasks')
+          .update({ is_active: false })
+          .in('id', oldIds)
+          .eq('type', 'custom');
+      }
+
+      // 2. Cargar datos en paralelo
       const [tasksRes, completionsRes, slotsRes, stockRes] = await Promise.all([
-        supabase.from('tasks').select('id, description, type, frequency_days, is_urgent')
+        supabase
+          .from('tasks')
+          .select('id, description, type, frequency_days, next_execution, is_urgent')
           .eq('is_active', true)
           .or(`assigned_to.is.null,assigned_to.eq.${user.id}`)
+          .or(`type.eq.daily,type.eq.custom,and(type.eq.periodic,next_execution.lte.${today})`)
           .order('type'),
-        supabase.from('task_completions').select('task_id').eq('user_id', user.id).eq('date', today),
+        supabase
+          .from('task_completions')
+          .select('task_id')
+          .eq('user_id', user.id)
+          .eq('date', today),
         supabase.from('cage_slots').select('quantity'),
-        supabase.from('stock_items').select('id, name, unit, current_quantity, is_feed, bolsas_restantes, kg_por_bolsa').order('name'),
+        supabase
+          .from('stock_items')
+          .select('id, name, unit, current_quantity, is_feed, bolsas_restantes, kg_por_bolsa')
+          .order('name'),
       ]);
 
       if (tasksRes.data) {
@@ -88,29 +125,60 @@ export default function Dashboard() {
     loadData();
   }, [authLoading, user, profile]);
 
-  const toggleTask = async (taskId: number) => {
+  // ── Toggle tarea ────────────────────────────────────────────────────────────
+  const toggleTask = async (task: Task) => {
     if (!user) return;
-    const isDone = completedIds.includes(taskId);
+    const isDone = completedIds.includes(task.id);
+
     if (isDone) {
-      await supabase.from('task_completions').delete().eq('task_id', taskId).eq('user_id', user.id).eq('date', today);
-      setCompletedIds(prev => prev.filter(id => id !== taskId));
+      // Desmarcar — solo diarias y custom (periódicas no se pueden desmarcar,
+      // ya que actualizar next_execution hacia atrás rompería la lógica)
+      await supabase
+        .from('task_completions')
+        .delete()
+        .eq('task_id', task.id)
+        .eq('user_id', user.id)
+        .eq('date', today);
+      setCompletedIds(prev => prev.filter(id => id !== task.id));
     } else {
-      await supabase.from('task_completions').insert({ task_id: taskId, user_id: user.id, completed: true, date: today });
-      setCompletedIds(prev => [...prev, taskId]);
+      // Marcar como hecha
+      await supabase
+        .from('task_completions')
+        .insert({ task_id: task.id, user_id: user.id, completed: true, date: today });
+
+      // Para periódicas: avanzar next_execution
+      if (task.type === 'periodic' && task.frequency_days) {
+        const next = new Date(today);
+        next.setDate(next.getDate() + task.frequency_days);
+        await supabase
+          .from('tasks')
+          .update({ next_execution: next.toISOString().split('T')[0], is_urgent: false })
+          .eq('id', task.id);
+      }
+
+      setCompletedIds(prev => [...prev, task.id]);
+
+      // Recargar para que la periódica desaparezca del listado
+      if (task.type === 'periodic') await loadData();
     }
   };
 
+  // ── Agregar tarea extra (custom de única vez) ───────────────────────────────
   const handleAddExtraTask = async () => {
     if (!extraTaskDesc.trim() || !user) return;
     await supabase.from('tasks').insert({
-      description: extraTaskDesc.trim(), type: 'custom',
-      is_active: true, created_by: user.id, assigned_to: user.id,
+      description: extraTaskDesc.trim(),
+      type: 'custom',
+      is_active: true,
+      created_by: user.id,
+      assigned_to: user.id,
     });
     setExtraTaskDesc('');
     setShowExtraTask(false);
     await loadData();
   };
 
+  // ── Insumos ─────────────────────────────────────────────────────────────────
   const handleOpenBolsa = async (feedItem: StockItem) => {
     if (!feedItem?.kg_por_bolsa || !feedItem?.bolsas_restantes || !user) return;
     setSavingStock(true);
@@ -144,7 +212,9 @@ export default function Dashboard() {
           stock_item_id: item.id, quantity: 1,
           movement_type: 'salida', user_id: user.id, date: today,
         }),
-        supabase.from('stock_items').update({ current_quantity: Math.max(0, item.current_quantity - 1) }).eq('id', item.id),
+        supabase.from('stock_items').update({
+          current_quantity: Math.max(0, item.current_quantity - 1),
+        }).eq('id', item.id),
       ]);
       setStockSaved(true);
       setTimeout(() => setStockSaved(false), 3000);
@@ -154,6 +224,7 @@ export default function Dashboard() {
     }
   };
 
+  // ── Render ──────────────────────────────────────────────────────────────────
   if (authLoading || loading) return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center">
       <div className="space-y-3 text-center">
@@ -172,19 +243,39 @@ export default function Dashboard() {
 
   const TaskItem = ({ task }: { task: Task }) => {
     const isDone = completedIds.includes(task.id);
+    const overdue = task.type === 'periodic' && isOverdue(task, today);
+    const showUrgent = overdue && !isDone;
+
     return (
-      <div onClick={() => toggleTask(task.id)}
+      <div
+        onClick={() => toggleTask(task)}
         className={`flex items-center gap-4 p-4 rounded-2xl border cursor-pointer transition-all active:scale-[0.99]
-          ${isDone ? 'bg-gray-50 border-gray-100' : 'bg-white border-gray-200 hover:border-yellow-300'}`}>
+          ${isDone
+            ? 'bg-gray-50 border-gray-100'
+            : showUrgent
+              ? 'bg-red-50 border-red-200 hover:border-red-300'
+              : 'bg-white border-gray-200 hover:border-yellow-300'
+          }`}
+      >
         <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition-all
-          ${isDone ? 'bg-yellow-400 border-yellow-400' : 'border-gray-300'}`}>
-          {isDone && <svg viewBox="0 0 12 12" className="w-3 h-3"><polyline points="2,6 5,9 10,3" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" /></svg>}
+          ${isDone ? 'bg-yellow-400 border-yellow-400' : showUrgent ? 'border-red-400' : 'border-gray-300'}`}>
+          {isDone && (
+            <svg viewBox="0 0 12 12" className="w-3 h-3">
+              <polyline points="2,6 5,9 10,3" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" />
+            </svg>
+          )}
         </div>
         <div className="flex-1">
-          <span className={`text-base ${isDone ? 'line-through text-gray-400' : 'text-gray-800'}`}>{task.description}</span>
-          {task.frequency_days && <p className="text-xs text-gray-400 mt-0.5">Cada {task.frequency_days} días</p>}
+          <span className={`text-base ${isDone ? 'line-through text-gray-400' : showUrgent ? 'text-red-700 font-semibold' : 'text-gray-800'}`}>
+            {task.description}
+          </span>
+          {task.type === 'periodic' && task.frequency_days && (
+            <p className="text-xs text-gray-400 mt-0.5">Cada {task.frequency_days} días</p>
+          )}
         </div>
-        {task.is_urgent && !isDone && <span className="badge-urgent">Urgente</span>}
+        {showUrgent && (
+          <span className="badge-urgent shrink-0">Urgente</span>
+        )}
       </div>
     );
   };
@@ -232,51 +323,69 @@ export default function Dashboard() {
           </Link>
         </div>
 
-        {/* Tasks */}
+        {/* Tareas diarias */}
         {dailyTasks.length > 0 && (
           <div>
             <div className="flex items-center gap-2 mb-3">
               <CheckSquare className="w-4 h-4 text-yellow-500" />
               <h3 className="font-semibold text-gray-700 text-sm uppercase tracking-wide">Tareas diarias</h3>
             </div>
-            <div className="space-y-2">{dailyTasks.map(t => <TaskItem key={t.id} task={t} />)}</div>
+            <div className="space-y-2">
+              {dailyTasks.map(t => <TaskItem key={t.id} task={t} />)}
+            </div>
           </div>
         )}
 
+        {/* Tareas periódicas */}
         {periodicTasks.length > 0 && (
           <div>
             <div className="flex items-center gap-2 mb-3">
               <AlertTriangle className="w-4 h-4 text-orange-400" />
               <h3 className="font-semibold text-gray-700 text-sm uppercase tracking-wide">Tareas periódicas</h3>
             </div>
-            <div className="space-y-2">{periodicTasks.map(t => <TaskItem key={t.id} task={t} />)}</div>
+            <div className="space-y-2">
+              {periodicTasks.map(t => <TaskItem key={t.id} task={t} />)}
+            </div>
           </div>
         )}
 
+        {/* Tareas asignadas */}
         {customTasks.length > 0 && (
           <div>
             <div className="flex items-center gap-2 mb-3">
               <ClipboardList className="w-4 h-4 text-blue-400" />
               <h3 className="font-semibold text-gray-700 text-sm uppercase tracking-wide">Tareas asignadas</h3>
             </div>
-            <div className="space-y-2">{customTasks.map(t => <TaskItem key={t.id} task={t} />)}</div>
+            <div className="space-y-2">
+              {customTasks.map(t => <TaskItem key={t.id} task={t} />)}
+            </div>
           </div>
         )}
 
-        {/* Extra task */}
+        {/* Agregar tarea extra */}
         <div>
           {!showExtraTask ? (
-            <button onClick={() => setShowExtraTask(true)}
-              className="w-full py-3 rounded-2xl border-2 border-dashed border-gray-200 text-gray-400 hover:border-yellow-300 hover:text-yellow-500 transition-all flex items-center justify-center gap-2 text-sm">
+            <button
+              onClick={() => setShowExtraTask(true)}
+              className="w-full py-3 rounded-2xl border-2 border-dashed border-gray-200 text-gray-400 hover:border-yellow-300 hover:text-yellow-500 transition-all flex items-center justify-center gap-2 text-sm"
+            >
               <Plus className="w-4 h-4" /> Agregar tarea extra
             </button>
           ) : (
             <div className="bg-white rounded-2xl border border-gray-200 p-4 space-y-3">
-              <input className="input-base" placeholder="Descripción de la tarea..."
-                value={extraTaskDesc} onChange={e => setExtraTaskDesc(e.target.value)} autoFocus />
+              <p className="text-xs text-gray-400">Esta tarea desaparecerá automáticamente al día siguiente de completarse.</p>
+              <input
+                className="input-base"
+                placeholder="Descripción de la tarea..."
+                value={extraTaskDesc}
+                onChange={e => setExtraTaskDesc(e.target.value)}
+                autoFocus
+              />
               <div className="flex gap-2">
                 <button onClick={handleAddExtraTask} className="btn-primary flex-1 py-2 text-sm">Agregar</button>
-                <button onClick={() => setShowExtraTask(false)} className="btn-secondary px-3 py-2"><X className="w-4 h-4" /></button>
+                <button onClick={() => setShowExtraTask(false)} className="btn-secondary px-3 py-2">
+                  <X className="w-4 h-4" />
+                </button>
               </div>
             </div>
           )}
@@ -304,11 +413,16 @@ export default function Dashboard() {
                     <button onClick={() => handleOpenBolsa(feedItem)} disabled={savingStock} className="btn-primary px-4 py-2 text-sm">
                       {savingStock ? '...' : 'Confirmar'}
                     </button>
-                    <button onClick={() => setConfirmStock(null)} className="btn-secondary px-3 py-2"><X className="w-4 h-4" /></button>
+                    <button onClick={() => setConfirmStock(null)} className="btn-secondary px-3 py-2">
+                      <X className="w-4 h-4" />
+                    </button>
                   </div>
                 ) : (
-                  <button onClick={() => setConfirmStock(feedItem.id)} disabled={!feedItem.bolsas_restantes}
-                    className="btn-primary px-4 py-2 text-sm">
+                  <button
+                    onClick={() => setConfirmStock(feedItem.id)}
+                    disabled={!feedItem.bolsas_restantes}
+                    className="btn-primary px-4 py-2 text-sm"
+                  >
                     Abrí una bolsa
                   </button>
                 )}
@@ -325,17 +439,21 @@ export default function Dashboard() {
                     <button onClick={() => handleUseItem(item)} disabled={savingStock} className="btn-primary px-4 py-2 text-sm">
                       {savingStock ? '...' : 'Confirmar'}
                     </button>
-                    <button onClick={() => setConfirmStock(null)} className="btn-secondary px-3 py-2"><X className="w-4 h-4" /></button>
+                    <button onClick={() => setConfirmStock(null)} className="btn-secondary px-3 py-2">
+                      <X className="w-4 h-4" />
+                    </button>
                   </div>
                 ) : (
-                  <button onClick={() => setConfirmStock(item.id)} className="btn-secondary px-4 py-2 text-sm">Usar</button>
+                  <button onClick={() => setConfirmStock(item.id)} className="btn-secondary px-4 py-2 text-sm">
+                    Usar
+                  </button>
                 )}
               </div>
             ))}
           </div>
         </div>
 
-        {/* Link a lotes — acceso alternativo desde el fondo */}
+        {/* Link a lotes */}
         <Link href="/dashboard/lotes"
           className="w-full flex items-center justify-between bg-white border border-gray-200 rounded-2xl px-5 py-4 hover:border-yellow-300 transition-colors">
           <div className="flex items-center gap-3">
