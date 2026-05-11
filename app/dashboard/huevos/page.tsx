@@ -23,7 +23,6 @@ function Counter({
   const inputRef = useRef<HTMLInputElement>(null);
   const [focused, setFocused] = useState(false);
 
-  // Cuando entra en foco, selecciona todo el texto
   const handleFocus = () => {
     setFocused(true);
     setTimeout(() => inputRef.current?.select(), 0);
@@ -49,15 +48,14 @@ function Counter({
         <label className="text-sm font-medium text-gray-600">{label}</label>
         {sublabel && <p className="text-xs text-gray-400 mt-0.5">{sublabel}</p>}
       </div>
-      <div className={`bg-gray-50 rounded-2xl border flex items-center justify-between px-2 py-2 gap-2 transition-colors
+      <div className={`bg-gray-50 rounded-2xl border flex items-center px-2 py-2 gap-2 transition-colors overflow-hidden
         ${focused ? 'border-yellow-400 bg-white' : 'border-gray-200'}`}>
         <button
           type="button"
           onClick={() => onChange(Math.max(0, (value ?? 0) - 1))}
-          className="w-14 h-14 rounded-xl bg-white border border-gray-200 text-3xl font-light text-gray-500 active:scale-95 active:bg-gray-100 transition-all flex items-center justify-center select-none"
+          className="w-10 h-10 shrink-0 rounded-xl bg-white border border-gray-200 text-2xl font-light text-gray-500 active:scale-95 active:bg-gray-100 transition-all flex items-center justify-center select-none"
         >−</button>
 
-        {/* Input siempre en el DOM — sin montaje/desmontaje, el cursor no se escapa */}
         <input
           ref={inputRef}
           type="number"
@@ -68,14 +66,14 @@ function Counter({
           onFocus={handleFocus}
           onBlur={handleBlur}
           onKeyDown={e => { if (e.key === 'Enter') inputRef.current?.blur(); }}
-          className="flex-1 text-center text-5xl font-bold text-gray-900 outline-none bg-transparent
+          className="flex-1 min-w-0 text-center text-4xl font-bold text-gray-900 outline-none bg-transparent
             [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
         />
 
         <button
           type="button"
           onClick={() => onChange((value ?? 0) + 1)}
-          className="w-14 h-14 rounded-xl bg-yellow-400 text-3xl font-bold text-gray-900 active:scale-95 active:bg-yellow-500 transition-all flex items-center justify-center select-none"
+          className="w-10 h-10 shrink-0 rounded-xl bg-yellow-400 text-2xl font-bold text-gray-900 active:scale-95 active:bg-yellow-500 transition-all flex items-center justify-center select-none"
         >+</button>
       </div>
     </div>
@@ -159,7 +157,6 @@ export default function RegistroHuevos() {
     setTimeout(() => setToastVisible(false), 3000);
   };
 
-  // Verificar si ya existe registro para la fecha seleccionada
   const checkExistingConsumo = useCallback(async (date: string) => {
     if (!user) return;
     const { data } = await supabase
@@ -204,7 +201,6 @@ export default function RegistroHuevos() {
 
   const isOwner = profile.role === 'owner';
 
-  // Validación: al menos un campo > 0
   const consumoValido = (bandejas ?? 0) > 0 || (bandFertiles ?? 0) > 0 || (docenas ?? 0) > 0 || (rotos ?? 0) > 0;
   const fertilesValido = (bandProcesadas ?? 0) > 0 || (docenasFertiles ?? 0) > 0 || (descarte ?? 0) > 0;
 
@@ -306,7 +302,6 @@ export default function RegistroHuevos() {
               <DatePicker value={dateConsumo} onChange={setDateConsumo} />
             </div>
 
-            {/* Aviso registro duplicado */}
             {existeConsumo && (
               <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3">
                 <AlertCircle className="w-4 h-4 text-amber-500 shrink-0" />
