@@ -111,11 +111,12 @@ function DatePicker({ value, onChange }: { value: string; onChange: (v: string) 
 
 // ─── Toast ────────────────────────────────────────────────────────────────────
 
+// Posicionado debajo del header (top-16) para no quedar cortado por el sticky header
 function Toast({ message, visible }: { message: string; visible: boolean }) {
   return (
-    <div className={`fixed top-4 left-1/2 -translate-x-1/2 z-50 transition-all duration-300
+    <div className={`fixed top-16 left-1/2 -translate-x-1/2 z-50 transition-all duration-300 px-4 w-full max-w-sm
       ${visible ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-2 pointer-events-none'}`}>
-      <div className="bg-green-500 text-white px-5 py-3 rounded-2xl shadow-lg font-medium text-sm flex items-center gap-2">
+      <div className="bg-green-500 text-white px-5 py-3 rounded-2xl shadow-lg font-medium text-sm flex items-center justify-center gap-2">
         ✓ {message}
       </div>
     </div>
@@ -306,7 +307,7 @@ export default function RegistroHuevos() {
               <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3">
                 <AlertCircle className="w-4 h-4 text-amber-500 shrink-0" />
                 <p className="text-sm text-amber-700 font-medium">
-                  Ya existe un registro de consumo para este día. Podés igualmente guardar otro.
+                  Ya existe un registro para este día. Podés igualmente guardar otro.
                 </p>
               </div>
             )}
