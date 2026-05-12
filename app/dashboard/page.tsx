@@ -8,7 +8,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
   Egg, CheckSquare, AlertTriangle, ClipboardList,
-  Plus, X, Bird, ChevronRight,
+  Plus, X, Bird, ChevronRight, FlaskConical, Check,
 } from 'lucide-react';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -32,12 +32,52 @@ type StockItem = {
   kg_por_bolsa?: number | null;
 };
 
+type ActiveTreatment = {
+  id: number;
+  type: string;
+  date: string;
+  lot_id: number | null;
+  dose_applied: number | null;
+  water_liters: number | null;
+  duration_days: number | null;
+  health_product_id: number | null;
+  notes: string | null;
+};
+
+type HealthProduct = {
+  id: number;
+  name: string;
+  unit: string;
+};
+
+type Lot = { id: number; code: string };
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-// Calcula si una periódica está vencida (next_execution < hoy)
 function isOverdue(task: Task, today: string): boolean {
   if (!task.next_execution) return false;
   return task.next_execution < today;
+}
+
+function getTreatmentDay(treatment: ActiveTreatment, today: string): number | null {
+  if (!treatment.duration_days) return null;
+  // T12:00:00 evita problemas de timezone — mediodía siempre es el mismo día en cualquier zona
+  const start = new Date(treatment.date + 'T12:00:00');
+  const current = new Date(today + 'T12:00:00');
+  const diff = Math.floor((current.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+  if (diff < 0 || diff >= treatment.duration_days) return null;
+  return diff + 1;
+}
+
+function tipoColor(t: string) {
+  switch (t) {
+    case 'Antibiótico': return 'bg-red-100 text-red-700 border-red-200';
+    case 'Vitaminas': return 'bg-emerald-100 text-emerald-700 border-emerald-200';
+    case 'Limpieza profunda': return 'bg-blue-100 text-blue-700 border-blue-200';
+    case 'Vacuna': return 'bg-purple-100 text-purple-700 border-purple-200';
+    case 'Antiparasitario': return 'bg-orange-100 text-orange-700 border-orange-200';
+    default: return 'bg-gray-100 text-gray-700 border-gray-200';
+  }
 }
 
 // ─── Main Dashboard ───────────────────────────────────────────────────────────
@@ -52,6 +92,10 @@ export default function Dashboard() {
   const [completedIds, setCompletedIds] = useState<number[]>([]);
   const [stockItems, setStockItems] = useState<StockItem[]>([]);
   const [totalAvesActivas, setTotalAvesActivas] = useState(0);
+  const [activeTreatments, setActiveTreatments] = useState<ActiveTreatment[]>([]);
+  const [confirmedTreatments, setConfirmedTreatments] = useState<number[]>([]); // record_ids confirmed today
+  const [products, setProducts] = useState<HealthProduct[]>([]);
+  const [lots, setLots] = useState<Lot[]>([]);
 
   const [stockSaved, setStockSaved] = useState(false);
   const [savingStock, setSavingStock] = useState(false);
@@ -59,13 +103,29 @@ export default function Dashboard() {
   const [showExtraTask, setShowExtraTask] = useState(false);
   const [extraTaskDesc, setExtraTaskDesc] = useState('');
   const [loading, setLoading] = useState(false);
+  const [confirmingTreatment, setConfirmingTreatment] = useState<number | null>(null);
 
-  const today = new Date().toISOString().split('T')[0];
+  // today en hora local (no UTC) — evita bug de timezone Argentina (UTC-3)
+  const getToday = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
+
+  const [today, setToday] = useState(getToday);
+
+  // Detectar cambio de día — recarga si la app quedó abierta de un día al otro
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const newToday = getToday();
+      if (newToday !== today) setToday(newToday);
+    }, 60000);
+    return () => clearInterval(interval);
+  }, [today]);
 
   const loadData = useCallback(async () => {
     if (!user) return;
     try {
-      // 1. Limpiar tareas custom completadas en días anteriores
+      // Limpiar tareas custom completadas en días anteriores
       const { data: oldCustomCompletions } = await supabase
         .from('task_completions')
         .select('task_id')
@@ -74,33 +134,22 @@ export default function Dashboard() {
 
       if (oldCustomCompletions && oldCustomCompletions.length > 0) {
         const oldIds = oldCustomCompletions.map(c => c.task_id);
-        // Desactivar solo las custom que fueron completadas antes de hoy
-        await supabase
-          .from('tasks')
-          .update({ is_active: false })
-          .in('id', oldIds)
-          .eq('type', 'custom');
+        await supabase.from('tasks').update({ is_active: false }).in('id', oldIds).eq('type', 'custom');
       }
 
-      // 2. Cargar datos en paralelo
-      const [tasksRes, completionsRes, slotsRes, stockRes] = await Promise.all([
-        supabase
-          .from('tasks')
-          .select('id, description, type, frequency_days, next_execution, is_urgent')
+      const [tasksRes, completionsRes, slotsRes, stockRes, recordsRes, productsRes, lotsRes, confirmRes] = await Promise.all([
+        supabase.from('tasks').select('id, description, type, frequency_days, next_execution, is_urgent')
           .eq('is_active', true)
           .or(`assigned_to.is.null,assigned_to.eq.${user.id}`)
           .or(`type.eq.daily,type.eq.custom,and(type.eq.periodic,next_execution.lte.${today})`)
           .order('type'),
-        supabase
-          .from('task_completions')
-          .select('task_id')
-          .eq('user_id', user.id)
-          .eq('date', today),
+        supabase.from('task_completions').select('task_id').eq('user_id', user.id).eq('date', today),
         supabase.from('cage_slots').select('quantity'),
-        supabase
-          .from('stock_items')
-          .select('id, name, unit, current_quantity, is_feed, bolsas_restantes, kg_por_bolsa')
-          .order('name'),
+        supabase.from('stock_items').select('id, name, unit, current_quantity, is_feed, bolsas_restantes, kg_por_bolsa').order('name'),
+        supabase.from('health_records').select('id, type, date, lot_id, dose_applied, water_liters, duration_days, health_product_id, notes'),
+        supabase.from('health_products').select('id, name, unit'),
+        supabase.from('lots').select('id, code').eq('status', 'activo'),
+        supabase.from('treatment_confirmations').select('record_id').eq('date', today),
       ]);
 
       if (tasksRes.data) {
@@ -111,6 +160,23 @@ export default function Dashboard() {
       if (completionsRes.data) setCompletedIds(completionsRes.data.map(c => c.task_id));
       if (slotsRes.data) setTotalAvesActivas(slotsRes.data.reduce((s, sl) => s + sl.quantity, 0));
       if (stockRes.data) setStockItems(stockRes.data);
+      if (productsRes.data) setProducts(productsRes.data);
+      if (lotsRes.data) setLots(lotsRes.data);
+      if (confirmRes.data) setConfirmedTreatments(confirmRes.data.map(c => c.record_id));
+
+      // Filtrar tratamientos activos hoy — comparacion de strings evita bugs de timezone
+      if (recordsRes.data) {
+        const active = recordsRes.data.filter(r => {
+          if (!r.duration_days) return false;
+          // Calcular fecha fin del tratamiento (exclusive)
+          const start = new Date(r.date + 'T12:00:00');
+          const end = new Date(r.date + 'T12:00:00');
+          end.setDate(end.getDate() + r.duration_days);
+          const todayMid = new Date(today + 'T12:00:00');
+          return todayMid >= start && todayMid < end;
+        });
+        setActiveTreatments(active);
+      }
     } catch (error) {
       console.error('Error cargando dashboard colaborador:', error);
     } finally {
@@ -129,49 +195,43 @@ export default function Dashboard() {
   const toggleTask = async (task: Task) => {
     if (!user) return;
     const isDone = completedIds.includes(task.id);
-
     if (isDone) {
-      // Desmarcar — solo diarias y custom (periódicas no se pueden desmarcar,
-      // ya que actualizar next_execution hacia atrás rompería la lógica)
-      await supabase
-        .from('task_completions')
-        .delete()
-        .eq('task_id', task.id)
-        .eq('user_id', user.id)
-        .eq('date', today);
+      await supabase.from('task_completions').delete()
+        .eq('task_id', task.id).eq('user_id', user.id).eq('date', today);
       setCompletedIds(prev => prev.filter(id => id !== task.id));
     } else {
-      // Marcar como hecha
-      await supabase
-        .from('task_completions')
-        .insert({ task_id: task.id, user_id: user.id, completed: true, date: today });
-
-      // Para periódicas: avanzar next_execution
+      await supabase.from('task_completions').insert({ task_id: task.id, user_id: user.id, completed: true, date: today });
       if (task.type === 'periodic' && task.frequency_days) {
         const next = new Date(today);
         next.setDate(next.getDate() + task.frequency_days);
-        await supabase
-          .from('tasks')
-          .update({ next_execution: next.toISOString().split('T')[0], is_urgent: false })
-          .eq('id', task.id);
+        await supabase.from('tasks').update({ next_execution: next.toISOString().split('T')[0], is_urgent: false }).eq('id', task.id);
       }
-
       setCompletedIds(prev => [...prev, task.id]);
-
-      // Recargar para que la periódica desaparezca del listado
       if (task.type === 'periodic') await loadData();
     }
   };
 
-  // ── Agregar tarea extra (custom de única vez) ───────────────────────────────
+  // ── Confirmar tratamiento ───────────────────────────────────────────────────
+  const handleConfirmTreatment = async (recordId: number) => {
+    if (!user) return;
+    setConfirmingTreatment(recordId);
+    await supabase.from('treatment_confirmations').insert({ record_id: recordId, date: today, user_id: user.id });
+    setConfirmedTreatments(prev => [...prev, recordId]);
+    setConfirmingTreatment(null);
+  };
+
+  const handleUnconfirmTreatment = async (recordId: number) => {
+    if (!user) return;
+    await supabase.from('treatment_confirmations').delete().eq('record_id', recordId).eq('date', today);
+    setConfirmedTreatments(prev => prev.filter(id => id !== recordId));
+  };
+
+  // ── Agregar tarea extra ─────────────────────────────────────────────────────
   const handleAddExtraTask = async () => {
     if (!extraTaskDesc.trim() || !user) return;
     await supabase.from('tasks').insert({
-      description: extraTaskDesc.trim(),
-      type: 'custom',
-      is_active: true,
-      created_by: user.id,
-      assigned_to: user.id,
+      description: extraTaskDesc.trim(), type: 'custom',
+      is_active: true, created_by: user.id, assigned_to: user.id,
     });
     setExtraTaskDesc('');
     setShowExtraTask(false);
@@ -209,12 +269,9 @@ export default function Dashboard() {
     try {
       await Promise.all([
         supabase.from('stock_movements').insert({
-          stock_item_id: item.id, quantity: 1,
-          movement_type: 'salida', user_id: user.id, date: today,
+          stock_item_id: item.id, quantity: 1, movement_type: 'salida', user_id: user.id, date: today,
         }),
-        supabase.from('stock_items').update({
-          current_quantity: Math.max(0, item.current_quantity - 1),
-        }).eq('id', item.id),
+        supabase.from('stock_items').update({ current_quantity: Math.max(0, item.current_quantity - 1) }).eq('id', item.id),
       ]);
       setStockSaved(true);
       setTimeout(() => setStockSaved(false), 3000);
@@ -240,6 +297,8 @@ export default function Dashboard() {
   const doneTasks = completedIds.length;
   const feedItems = stockItems.filter(i => i.is_feed);
   const otherItems = stockItems.filter(i => !i.is_feed);
+  const allTreatmentsConfirmed = activeTreatments.length > 0 &&
+    activeTreatments.every(t => confirmedTreatments.includes(t.id));
 
   const TaskItem = ({ task }: { task: Task }) => {
     const isDone = completedIds.includes(task.id);
@@ -247,23 +306,14 @@ export default function Dashboard() {
     const showUrgent = overdue && !isDone;
 
     return (
-      <div
-        onClick={() => toggleTask(task)}
+      <div onClick={() => toggleTask(task)}
         className={`flex items-center gap-4 p-4 rounded-2xl border cursor-pointer transition-all active:scale-[0.99]
-          ${isDone
-            ? 'bg-gray-50 border-gray-100'
-            : showUrgent
-              ? 'bg-red-50 border-red-200 hover:border-red-300'
-              : 'bg-white border-gray-200 hover:border-yellow-300'
-          }`}
-      >
+          ${isDone ? 'bg-gray-50 border-gray-100'
+            : showUrgent ? 'bg-red-50 border-red-200 hover:border-red-300'
+            : 'bg-white border-gray-200 hover:border-yellow-300'}`}>
         <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition-all
           ${isDone ? 'bg-yellow-400 border-yellow-400' : showUrgent ? 'border-red-400' : 'border-gray-300'}`}>
-          {isDone && (
-            <svg viewBox="0 0 12 12" className="w-3 h-3">
-              <polyline points="2,6 5,9 10,3" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" />
-            </svg>
-          )}
+          {isDone && <svg viewBox="0 0 12 12" className="w-3 h-3"><polyline points="2,6 5,9 10,3" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" /></svg>}
         </div>
         <div className="flex-1">
           <span className={`text-base ${isDone ? 'line-through text-gray-400' : showUrgent ? 'text-red-700 font-semibold' : 'text-gray-800'}`}>
@@ -273,9 +323,7 @@ export default function Dashboard() {
             <p className="text-xs text-gray-400 mt-0.5">Cada {task.frequency_days} días</p>
           )}
         </div>
-        {showUrgent && (
-          <span className="badge-urgent shrink-0">Urgente</span>
-        )}
+        {showUrgent && <span className="badge-urgent shrink-0">Urgente</span>}
       </div>
     );
   };
@@ -323,6 +371,89 @@ export default function Dashboard() {
           </Link>
         </div>
 
+        {/* ── Tratamientos activos ── */}
+        {activeTreatments.length > 0 && (
+          <div>
+            <div className="flex items-center gap-2 mb-3">
+              <FlaskConical className="w-4 h-4 text-blue-500" />
+              <h3 className="font-semibold text-gray-700 text-sm uppercase tracking-wide">Tratamientos de hoy</h3>
+              {allTreatmentsConfirmed && (
+                <span className="text-[10px] font-black text-green-600 bg-green-100 px-2 py-0.5 rounded-full">✓ Todos aplicados</span>
+              )}
+            </div>
+            <div className="space-y-3">
+              {activeTreatments.map(t => {
+                const day = getTreatmentDay(t, today);
+                if (!day) return null;
+                const product = products.find(p => p.id === t.health_product_id);
+                const lot = lots.find(l => l.id === t.lot_id);
+                const confirmed = confirmedTreatments.includes(t.id);
+
+                return (
+                  <div key={t.id}
+                    className={`rounded-2xl border-2 p-4 transition-all
+                      ${confirmed ? 'bg-green-50 border-green-200' : 'bg-blue-50 border-blue-200'}`}>
+
+                    {/* Header */}
+                    <div className="flex items-start justify-between mb-3">
+                      <div className="flex flex-wrap gap-2">
+                        <span className={`text-[10px] font-black px-2.5 py-1 rounded-full border uppercase ${tipoColor(t.type)}`}>
+                          {t.type}
+                        </span>
+                        <span className="text-[10px] font-bold text-blue-600 bg-white border border-blue-100 px-2 py-0.5 rounded-full">
+                          Día {day} de {t.duration_days}
+                        </span>
+                      </div>
+                      <span className="text-[10px] text-gray-500 font-medium">
+                        {lot ? lot.code : 'Todo el plantel'}
+                      </span>
+                    </div>
+
+                    {/* Dosis */}
+                    {product && t.dose_applied !== null && (
+                      <div className="bg-white rounded-xl px-4 py-3 border border-blue-100 mb-3">
+                        <p className="text-[10px] font-black text-gray-400 uppercase mb-1">Dosis a aplicar</p>
+                        <p className="text-2xl font-black text-blue-700">
+                          {t.dose_applied} <span className="text-base font-bold">{product.unit}</span>
+                        </p>
+                        {t.water_liters && t.water_liters > 0 && (
+                          <p className="text-xs text-blue-500 mt-1 font-medium">
+                            {(t.dose_applied / t.water_liters).toFixed(2)} {product.unit} por litro de agua
+                          </p>
+                        )}
+                        <p className="text-xs text-gray-400 mt-0.5">{product.name}</p>
+                      </div>
+                    )}
+
+                    {t.notes && (
+                      <p className="text-xs text-gray-500 italic mb-3">{t.notes}</p>
+                    )}
+
+                    {/* Confirmación */}
+                    {confirmed ? (
+                      <button
+                        onClick={() => handleUnconfirmTreatment(t.id)}
+                        className="w-full py-3 rounded-xl bg-green-500 text-white font-bold text-sm flex items-center justify-center gap-2 hover:bg-green-600 transition-colors"
+                      >
+                        <Check className="w-4 h-4" /> Aplicado — tocar para desmarcar
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => handleConfirmTreatment(t.id)}
+                        disabled={confirmingTreatment === t.id}
+                        className="w-full py-3 rounded-xl bg-blue-500 hover:bg-blue-600 text-white font-bold text-sm flex items-center justify-center gap-2 transition-colors disabled:opacity-60"
+                      >
+                        <FlaskConical className="w-4 h-4" />
+                        {confirmingTreatment === t.id ? 'Confirmando...' : 'Confirmar aplicación'}
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {/* Tareas diarias */}
         {dailyTasks.length > 0 && (
           <div>
@@ -330,9 +461,7 @@ export default function Dashboard() {
               <CheckSquare className="w-4 h-4 text-yellow-500" />
               <h3 className="font-semibold text-gray-700 text-sm uppercase tracking-wide">Tareas diarias</h3>
             </div>
-            <div className="space-y-2">
-              {dailyTasks.map(t => <TaskItem key={t.id} task={t} />)}
-            </div>
+            <div className="space-y-2">{dailyTasks.map(t => <TaskItem key={t.id} task={t} />)}</div>
           </div>
         )}
 
@@ -343,9 +472,7 @@ export default function Dashboard() {
               <AlertTriangle className="w-4 h-4 text-orange-400" />
               <h3 className="font-semibold text-gray-700 text-sm uppercase tracking-wide">Tareas periódicas</h3>
             </div>
-            <div className="space-y-2">
-              {periodicTasks.map(t => <TaskItem key={t.id} task={t} />)}
-            </div>
+            <div className="space-y-2">{periodicTasks.map(t => <TaskItem key={t.id} task={t} />)}</div>
           </div>
         )}
 
@@ -356,36 +483,25 @@ export default function Dashboard() {
               <ClipboardList className="w-4 h-4 text-blue-400" />
               <h3 className="font-semibold text-gray-700 text-sm uppercase tracking-wide">Tareas asignadas</h3>
             </div>
-            <div className="space-y-2">
-              {customTasks.map(t => <TaskItem key={t.id} task={t} />)}
-            </div>
+            <div className="space-y-2">{customTasks.map(t => <TaskItem key={t.id} task={t} />)}</div>
           </div>
         )}
 
         {/* Agregar tarea extra */}
         <div>
           {!showExtraTask ? (
-            <button
-              onClick={() => setShowExtraTask(true)}
-              className="w-full py-3 rounded-2xl border-2 border-dashed border-gray-200 text-gray-400 hover:border-yellow-300 hover:text-yellow-500 transition-all flex items-center justify-center gap-2 text-sm"
-            >
+            <button onClick={() => setShowExtraTask(true)}
+              className="w-full py-3 rounded-2xl border-2 border-dashed border-gray-200 text-gray-400 hover:border-yellow-300 hover:text-yellow-500 transition-all flex items-center justify-center gap-2 text-sm">
               <Plus className="w-4 h-4" /> Agregar tarea extra
             </button>
           ) : (
             <div className="bg-white rounded-2xl border border-gray-200 p-4 space-y-3">
-              <p className="text-xs text-gray-400">Esta tarea desaparecerá automáticamente al día siguiente de completarse.</p>
-              <input
-                className="input-base"
-                placeholder="Descripción de la tarea..."
-                value={extraTaskDesc}
-                onChange={e => setExtraTaskDesc(e.target.value)}
-                autoFocus
-              />
+              <p className="text-xs text-gray-400">Desaparecerá automáticamente al día siguiente de completarse.</p>
+              <input className="input-base" placeholder="Descripción de la tarea..."
+                value={extraTaskDesc} onChange={e => setExtraTaskDesc(e.target.value)} autoFocus />
               <div className="flex gap-2">
                 <button onClick={handleAddExtraTask} className="btn-primary flex-1 py-2 text-sm">Agregar</button>
-                <button onClick={() => setShowExtraTask(false)} className="btn-secondary px-3 py-2">
-                  <X className="w-4 h-4" />
-                </button>
+                <button onClick={() => setShowExtraTask(false)} className="btn-secondary px-3 py-2"><X className="w-4 h-4" /></button>
               </div>
             </div>
           )}
@@ -413,16 +529,11 @@ export default function Dashboard() {
                     <button onClick={() => handleOpenBolsa(feedItem)} disabled={savingStock} className="btn-primary px-4 py-2 text-sm">
                       {savingStock ? '...' : 'Confirmar'}
                     </button>
-                    <button onClick={() => setConfirmStock(null)} className="btn-secondary px-3 py-2">
-                      <X className="w-4 h-4" />
-                    </button>
+                    <button onClick={() => setConfirmStock(null)} className="btn-secondary px-3 py-2"><X className="w-4 h-4" /></button>
                   </div>
                 ) : (
-                  <button
-                    onClick={() => setConfirmStock(feedItem.id)}
-                    disabled={!feedItem.bolsas_restantes}
-                    className="btn-primary px-4 py-2 text-sm"
-                  >
+                  <button onClick={() => setConfirmStock(feedItem.id)} disabled={!feedItem.bolsas_restantes}
+                    className="btn-primary px-4 py-2 text-sm">
                     Abrí una bolsa
                   </button>
                 )}
@@ -439,14 +550,10 @@ export default function Dashboard() {
                     <button onClick={() => handleUseItem(item)} disabled={savingStock} className="btn-primary px-4 py-2 text-sm">
                       {savingStock ? '...' : 'Confirmar'}
                     </button>
-                    <button onClick={() => setConfirmStock(null)} className="btn-secondary px-3 py-2">
-                      <X className="w-4 h-4" />
-                    </button>
+                    <button onClick={() => setConfirmStock(null)} className="btn-secondary px-3 py-2"><X className="w-4 h-4" /></button>
                   </div>
                 ) : (
-                  <button onClick={() => setConfirmStock(item.id)} className="btn-secondary px-4 py-2 text-sm">
-                    Usar
-                  </button>
+                  <button onClick={() => setConfirmStock(item.id)} className="btn-secondary px-4 py-2 text-sm">Usar</button>
                 )}
               </div>
             ))}
