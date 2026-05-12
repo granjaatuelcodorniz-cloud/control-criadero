@@ -8,7 +8,7 @@ import Header from '@/components/Header';
 import Link from 'next/link';
 import {
   TrendingUp, Package, Heart, ClipboardList, BarChart2,
-  AlertTriangle, CheckCircle, Clock, Egg,
+  AlertTriangle, CheckCircle, Clock, Egg, Activity,
 } from 'lucide-react';
 
 type DailyRecord = {
@@ -49,21 +49,25 @@ export default function AdminDashboard() {
       const sevenDaysAgo = new Date();
       sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
 
-      const [todayRes, fertileRes, weekRes, lotsRes, stockRes, tasksRes] = await Promise.all([
+      const [todayRes, fertileRes, weekRes, slotsRes, stockRes, tasksRes, healthRes] = await Promise.all([
         supabase.from('daily_records').select('*').eq('date', today).order('created_at', { ascending: false }).limit(1),
         supabase.from('fertile_records').select('*').eq('date', today).order('created_at', { ascending: false }).limit(1),
         supabase.from('daily_records').select('date, registered_at, bandejas_consumo, bandejas_fertiles, docenas_armadas, huevos_rotos, notas').gte('date', sevenDaysAgo.toISOString().split('T')[0]).order('date'),
-        supabase.from('lots').select('current_quantity'),
+        supabase.from('cage_slots').select('quantity'),
         supabase.from('stock_items').select('name, unit, current_quantity, alert_threshold'),
         supabase.from('tasks').select('description').eq('is_urgent', true).eq('is_active', true),
+        // Alertas de sanidad: próximas aplicaciones vencidas
+        supabase.from('health_records').select('type, next_application').not('next_application', 'is', null),
       ]);
 
       if (todayRes.data?.[0]) setTodayRecord(todayRes.data[0]);
       if (fertileRes.data?.[0]) setTodayFertile(fertileRes.data[0]);
       if (weekRes.data) setWeekRecords(weekRes.data);
-      if (lotsRes.data) setTotalAves(lotsRes.data.reduce((s, l) => s + l.current_quantity, 0));
+      if (slotsRes.data) setTotalAves(slotsRes.data.reduce((s, sl) => s + sl.quantity, 0));
 
       const newAlerts: Alert[] = [];
+
+      // Alertas de stock
       if (stockRes.data) {
         stockRes.data.forEach(item => {
           if (item.current_quantity <= item.alert_threshold) {
@@ -74,11 +78,23 @@ export default function AdminDashboard() {
           }
         });
       }
+
+      // Alertas de tareas urgentes
       if (tasksRes.data) {
         tasksRes.data.forEach(t => {
           newAlerts.push({ type: 'danger', message: `Tarea urgente: ${t.description}` });
         });
       }
+
+      // Alertas de sanidad vencidas
+      if (healthRes.data) {
+        healthRes.data.forEach(r => {
+          if (r.next_application && r.next_application < today) {
+            newAlerts.push({ type: 'warning', message: `Aplicación vencida: ${r.type}` });
+          }
+        });
+      }
+
       if (newAlerts.length === 0) newAlerts.push({ type: 'ok', message: 'Todo en orden por ahora' });
       setAlerts(newAlerts);
     } catch (error) {
@@ -129,6 +145,7 @@ export default function AdminDashboard() {
     { href: '/dashboard/admin/sanidad', icon: Heart, label: 'Sanidad', color: 'text-red-500', bg: 'bg-red-50' },
     { href: '/dashboard/admin/tareas', icon: ClipboardList, label: 'Tareas', color: 'text-purple-600', bg: 'bg-purple-50' },
     { href: '/dashboard/admin/analisis', icon: BarChart2, label: 'Análisis', color: 'text-yellow-600', bg: 'bg-yellow-50' },
+    { href: '/dashboard/admin/actividad', icon: Activity, label: 'Actividad', color: 'text-indigo-600', bg: 'bg-indigo-50' },
   ];
 
   return (
@@ -272,7 +289,8 @@ export default function AdminDashboard() {
                   return (
                     <div key={i} className="flex flex-col items-center gap-1 flex-1">
                       <span className="text-xs text-gray-400">{total > 0 ? total : ''}</span>
-                      <div className={`w-full rounded-t-lg transition-all ${isToday ? 'bg-yellow-400' : 'bg-yellow-100'}`} style={{ height: `${Math.max(h, 4)}px` }} />
+                      <div className={`w-full rounded-t-lg transition-all ${isToday ? 'bg-yellow-400' : 'bg-yellow-100'}`}
+                        style={{ height: `${Math.max(h, 4)}px` }} />
                       <span className="text-xs text-gray-400">{dayLabel}</span>
                     </div>
                   );
@@ -295,7 +313,9 @@ export default function AdminDashboard() {
                 ${a.type === 'danger' ? 'bg-red-50 border-red-100 text-red-700' :
                   a.type === 'warning' ? 'bg-yellow-50 border-yellow-100 text-yellow-700' :
                   'bg-green-50 border-green-100 text-green-700'}`}>
-                {a.type === 'ok' ? <CheckCircle className="w-4 h-4 flex-shrink-0" /> : <AlertTriangle className="w-4 h-4 flex-shrink-0" />}
+                {a.type === 'ok'
+                  ? <CheckCircle className="w-4 h-4 flex-shrink-0" />
+                  : <AlertTriangle className="w-4 h-4 flex-shrink-0" />}
                 {a.message}
               </div>
             ))}
@@ -307,7 +327,8 @@ export default function AdminDashboard() {
           <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Módulos</h3>
           <div className="grid grid-cols-2 gap-3">
             {navCards.map((card, i) => (
-              <Link key={i} href={card.href} className="bg-white rounded-2xl border border-gray-100 p-4 flex items-center gap-3 hover:border-yellow-300 transition-all">
+              <Link key={i} href={card.href}
+                className="bg-white rounded-2xl border border-gray-100 p-4 flex items-center gap-3 hover:border-yellow-300 transition-all">
                 <div className={`${card.bg} p-2 rounded-xl`}>
                   <card.icon className={`w-5 h-5 ${card.color}`} />
                 </div>
