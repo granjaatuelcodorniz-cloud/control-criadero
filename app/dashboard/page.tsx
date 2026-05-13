@@ -8,7 +8,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
   Egg, CheckSquare, AlertTriangle, ClipboardList,
-  Plus, X, Bird, ChevronRight, FlaskConical, Check,
+  Plus, X, Bird, FlaskConical, Check,
 } from 'lucide-react';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -738,19 +738,6 @@ export default function Dashboard() {
             ))}
           </div>
         </div>
-
-        {/* Link a lotes */}
-        <Link href="/dashboard/lotes"
-          className="w-full flex items-center justify-between bg-white border border-gray-200 rounded-2xl px-5 py-4 hover:border-yellow-300 transition-colors">
-          <div className="flex items-center gap-3">
-            <Bird className="w-5 h-5 text-gray-400" />
-            <div>
-              <p className="font-bold text-gray-700 text-sm">Ver lotes y bocas</p>
-              <p className="text-xs text-gray-400">Bajas y reacomodamientos</p>
-            </div>
-          </div>
-          <ChevronRight className="w-4 h-4 text-gray-300" />
-        </Link>
 
       </div>
     </div>
