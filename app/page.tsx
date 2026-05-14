@@ -24,18 +24,20 @@ export default function Login() {
 
     const params = new URLSearchParams(hash.slice(1));
     const accessToken = params.get('access_token');
+    const refreshToken = params.get('refresh_token');
     const type = params.get('type');
 
-    // type = 'invite' cuando viene de una invitación
     if (accessToken && (type === 'invite' || type === 'signup')) {
       const supabase = createClient();
 
-      // Establecer la sesión con el token de invitación
-      supabase.auth.getUser(accessToken).then(({ data }) => {
+      // Establecer sesión completa con access + refresh token
+      supabase.auth.setSession({
+        access_token: accessToken,
+        refresh_token: refreshToken || '',
+      }).then(({ data }) => {
         if (data?.user?.email) {
           setInviteEmail(data.user.email);
           setMode('set-password');
-          // Limpiar el hash de la URL para que no quede visible
           window.history.replaceState(null, '', window.location.pathname);
         }
       });
