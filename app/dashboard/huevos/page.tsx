@@ -222,7 +222,17 @@ export default function RegistroHuevos() {
     });
 
     if (!error) {
-      showToast('Registro de consumo guardado');
+      // Si hay bandejas fértiles, crearlas en fertile_batches (una por bandeja)
+      const numBandejasFertiles = bandFertiles ?? 0;
+      if (numBandejasFertiles > 0) {
+        const batches = Array.from({ length: numBandejasFertiles }, () => ({
+          date: dateConsumo,
+          user_id: user.id,
+          status: 'pendiente',
+        }));
+        await supabase.from('fertile_batches').insert(batches);
+      }
+      showToast('Registro guardado' + (numBandejasFertiles > 0 ? ` · ${numBandejasFertiles} bandeja${numBandejasFertiles > 1 ? 's' : ''} fértil${numBandejasFertiles > 1 ? 'es' : ''} pendiente${numBandejasFertiles > 1 ? 's' : ''}` : ''));
       setBandejas(null);
       setBandFertiles(null);
       setDocenas(null);

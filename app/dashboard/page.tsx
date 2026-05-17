@@ -51,7 +51,6 @@ type HealthProduct = {
 };
 
 type Lot = { id: number; code: string; current_quantity: number };
-type FertileBatch = { id: number; date: string; status: string };
 type CageSlot = { id: number; lot_id: number; slot_code: string; quantity: number };
 type LossType = 'muerte' | 'descarte' | 'venta';
 const LOSS_TYPE_LABELS: Record<LossType, string> = { muerte: 'Muerte', descarte: 'Descarte', venta: 'Venta' };
@@ -102,11 +101,6 @@ export default function Dashboard() {
   const [products, setProducts] = useState<HealthProduct[]>([]);
   const [lots, setLots] = useState<Lot[]>([]);
   const [slots, setSlots] = useState<CageSlot[]>([]);
-
-  // Bandejas fértiles
-  const [pendingBatches, setPendingBatches] = useState<FertileBatch[]>([]);
-  const [savingBatch, setSavingBatch] = useState(false);
-  const [batchSaved, setBatchSaved] = useState(false);
 
   // Baja rápida
   const [quickRow, setQuickRow] = useState('');
@@ -160,7 +154,7 @@ export default function Dashboard() {
         await supabase.from('tasks').update({ is_active: false }).in('id', oldIds).eq('type', 'custom');
       }
 
-      const [tasksRes, completionsRes, slotsRes, stockRes, recordsRes, productsRes, lotsRes, confirmRes, batchesRes] = await Promise.all([
+      const [tasksRes, completionsRes, slotsRes, stockRes, recordsRes, productsRes, lotsRes, confirmRes] = await Promise.all([
         supabase.from('tasks').select('id, description, type, frequency_days, next_execution, is_urgent')
           .eq('is_active', true)
           .or(`assigned_to.is.null,assigned_to.eq.${user.id}`)
@@ -173,7 +167,6 @@ export default function Dashboard() {
         supabase.from('health_products').select('id, name, unit'),
         supabase.from('lots').select('id, code, current_quantity').eq('status', 'activo'),
         supabase.from('treatment_confirmations').select('record_id').eq('date', today),
-        supabase.from('fertile_batches').select('id, date, status').eq('status', 'pendiente').order('date', { ascending: false }),
       ]);
 
       if (tasksRes.data) {
@@ -188,7 +181,6 @@ export default function Dashboard() {
       if (lotsRes.data) setLots(lotsRes.data);
       if (slotsRes.data) setSlots(slotsRes.data);
       if (confirmRes.data) setConfirmedTreatments(confirmRes.data.map(c => c.record_id));
-      if (batchesRes.data) setPendingBatches(batchesRes.data);
 
       // Filtrar tratamientos activos hoy — comparacion de strings evita bugs de timezone
       if (recordsRes.data) {
@@ -295,19 +287,6 @@ export default function Dashboard() {
     setSavingQuick(false);
     setQuickSaved(true);
     setTimeout(() => setQuickSaved(false), 3000);
-    await loadData();
-  };
-
-  // ── Registrar bandeja fértil ────────────────────────────────────────────────
-  const handleRegisterBatch = async () => {
-    if (!user) return;
-    setSavingBatch(true);
-    await supabase.from('fertile_batches').insert({
-      date: today, user_id: user.id, status: 'pendiente',
-    });
-    setSavingBatch(false);
-    setBatchSaved(true);
-    setTimeout(() => setBatchSaved(false), 3000);
     await loadData();
   };
 
@@ -461,39 +440,6 @@ export default function Dashboard() {
               </span>
             )}
           </Link>
-        </div>
-
-        {/* ── Bandeja fértil ── */}
-        <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-5">
-          <div className="flex items-center justify-between mb-3">
-            <div>
-              <p className="text-sm font-bold text-gray-700">Bandejas fértiles</p>
-              {pendingBatches.length > 0 && (
-                <p className="text-xs text-amber-600 mt-0.5">
-                  {pendingBatches.length} pendiente{pendingBatches.length > 1 ? 's' : ''} de procesar
-                </p>
-              )}
-            </div>
-            {batchSaved && <span className="text-[10px] font-black text-green-600 bg-green-100 px-2 py-0.5 rounded-full">✓ Registrada</span>}
-          </div>
-
-          {/* Bandejas pendientes */}
-          {pendingBatches.length > 0 && (
-            <div className="flex flex-wrap gap-2 mb-3">
-              {pendingBatches.map(b => (
-                <div key={b.id} className="bg-amber-50 border border-amber-200 rounded-xl px-3 py-1.5 text-xs font-bold text-amber-700">
-                  {new Date(b.date + 'T12:00:00').toLocaleDateString('es-AR', { day: 'numeric', month: 'short' })}
-                </div>
-              ))}
-            </div>
-          )}
-
-          <button
-            onClick={handleRegisterBatch}
-            disabled={savingBatch}
-            className="w-full py-3 rounded-2xl border-2 border-dashed border-amber-200 text-amber-600 font-bold text-sm hover:bg-amber-50 hover:border-amber-300 transition-all flex items-center justify-center gap-2">
-            {savingBatch ? 'Registrando...' : '+ Registrar bandeja fértil de hoy'}
-          </button>
         </div>
 
         {/* ── Baja rápida ── */}
