@@ -30,6 +30,7 @@ type FertileRecord = {
 };
 
 type Alert = { type: 'danger' | 'warning' | 'ok'; message: string };
+type FertileBatch = { id: number; date: string; status: string; docenas_seleccionadas: number | null; descarte: number | null };
 type CageSlot = { id: number; lot_id: number; slot_code: string; quantity: number };
 type Lot = { id: number; code: string; current_quantity: number };
 type LossType = 'muerte' | 'descarte' | 'venta';
@@ -60,13 +61,18 @@ export default function AdminDashboard() {
   const [quickSaved, setQuickSaved] = useState(false);
 
   const today = new Date().toISOString().split('T')[0];
+  const [pendingBatches, setPendingBatches] = useState<FertileBatch[]>([]);
+  const [processingBatch, setProcessingBatch] = useState<number | null>(null);
+  const [batchDocenas, setBatchDocenas] = useState('');
+  const [batchDescarte, setBatchDescarte] = useState('');
+  const [savingBatch, setSavingBatch] = useState(false);
 
   const load = async () => {
     try {
       const sevenDaysAgo = new Date();
       sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
 
-      const [todayRes, fertileRes, weekRes, slotsRes, lotsRes, stockRes, tasksRes, healthRes] = await Promise.all([
+      const [todayRes, fertileRes, weekRes, slotsRes, lotsRes, stockRes, tasksRes, healthRes, batchesRes] = await Promise.all([
         supabase.from('daily_records').select('*').eq('date', today).order('created_at', { ascending: false }).limit(1),
         supabase.from('fertile_records').select('*').eq('date', today).order('created_at', { ascending: false }).limit(1),
         supabase.from('daily_records').select('date, registered_at, bandejas_consumo, bandejas_fertiles, docenas_armadas, huevos_rotos, notas').gte('date', sevenDaysAgo.toISOString().split('T')[0]).order('date'),
@@ -76,12 +82,17 @@ export default function AdminDashboard() {
         supabase.from('tasks').select('description').eq('is_urgent', true).eq('is_active', true),
         // Alertas de sanidad: próximas aplicaciones vencidas
         supabase.from('health_records').select('type, next_application').not('next_application', 'is', null),
+        supabase.from('fertile_batches').select('*').eq('status', 'pendiente').order('date'),
       ]);
 
       if (todayRes.data?.[0]) setTodayRecord(todayRes.data[0]);
       if (fertileRes.data?.[0]) setTodayFertile(fertileRes.data[0]);
       if (weekRes.data) setWeekRecords(weekRes.data);
-      if (slotsRes.data) setTotalAves(slotsRes.data.reduce((s, sl) => s + sl.quantity, 0));
+      if (slotsRes.data) {
+        setSlots(slotsRes.data);
+        setTotalAves(slotsRes.data.reduce((s, sl) => s + sl.quantity, 0));
+      }
+      if (lotsRes.data) setLots(lotsRes.data);
 
       const newAlerts: Alert[] = [];
 
@@ -115,6 +126,7 @@ export default function AdminDashboard() {
 
       if (newAlerts.length === 0) newAlerts.push({ type: 'ok', message: 'Todo en orden por ahora' });
       setAlerts(newAlerts);
+      if (batchesRes.data) setPendingBatches(batchesRes.data);
     } catch (error) {
       console.error('Error cargando dashboard:', error);
     } finally {
@@ -173,6 +185,34 @@ export default function AdminDashboard() {
     setSavingQuick(false);
     setQuickSaved(true);
     setTimeout(() => setQuickSaved(false), 3000);
+    await load();
+  };
+
+  // ── Procesar bandeja fértil ─────────────────────────────────────────────────
+  const handleProcessBatch = async (batch: FertileBatch) => {
+    if (!batchDocenas || !user) return;
+    setSavingBatch(true);
+    const processedDate = today;
+    await supabase.from('fertile_batches').update({
+      status: 'procesada',
+      docenas_seleccionadas: Number(batchDocenas),
+      descarte: Number(batchDescarte) || 0,
+      processed_at: processedDate,
+      processed_by: user.id,
+    }).eq('id', batch.id);
+    // También insertar en fertile_records para mantener compatibilidad con análisis
+    await supabase.from('fertile_records').insert({
+      date: batch.date,
+      user_id: user.id,
+      bandejas_procesadas: 1,
+      docenas_seleccionadas: Number(batchDocenas),
+      descarte: Number(batchDescarte) || 0,
+      registered_at: new Date().toTimeString().split(' ')[0],
+    });
+    setProcessingBatch(null);
+    setBatchDocenas('');
+    setBatchDescarte('');
+    setSavingBatch(false);
     await load();
   };
 
@@ -407,6 +447,67 @@ export default function AdminDashboard() {
         <Link href="/dashboard/huevos" className="btn-primary w-full py-4 text-base rounded-2xl">
           <Egg className="w-5 h-5" /> Registrar huevos
         </Link>
+
+        {/* ── Bandejas fértiles pendientes ── */}
+        {pendingBatches.length > 0 && (
+          <div>
+            <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">
+              Bandejas fértiles pendientes
+            </h3>
+            <div className="space-y-3">
+              {pendingBatches.map(batch => (
+                <div key={batch.id} className="bg-white rounded-2xl border border-amber-200 overflow-hidden">
+                  <div className="flex items-center justify-between px-4 py-3">
+                    <div>
+                      <p className="font-bold text-gray-800 text-sm">
+                        Bandeja del {new Date(batch.date + 'T12:00:00').toLocaleDateString('es-AR', { weekday: 'long', day: 'numeric', month: 'long' })}
+                      </p>
+                      <p className="text-xs text-amber-600 font-medium mt-0.5">Pendiente de procesar</p>
+                    </div>
+                    {processingBatch !== batch.id && (
+                      <button
+                        onClick={() => { setProcessingBatch(batch.id); setBatchDocenas(''); setBatchDescarte(''); }}
+                        className="px-4 py-2 bg-amber-400 hover:bg-amber-500 text-amber-950 font-bold text-xs rounded-xl transition-colors">
+                        Procesar
+                      </button>
+                    )}
+                  </div>
+
+                  {processingBatch === batch.id && (
+                    <div className="px-4 pb-4 space-y-3 border-t border-amber-100 pt-3">
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="text-[10px] font-bold text-gray-400 uppercase ml-1">Docenas seleccionadas</label>
+                          <input type="number" min={0} className="input-base mt-1 text-center font-bold"
+                            placeholder="0" value={batchDocenas}
+                            onChange={e => setBatchDocenas(e.target.value)} autoFocus />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold text-gray-400 uppercase ml-1">Descarte (unidades)</label>
+                          <input type="number" min={0} className="input-base mt-1 text-center font-bold"
+                            placeholder="0" value={batchDescarte}
+                            onChange={e => setBatchDescarte(e.target.value)} />
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => handleProcessBatch(batch)}
+                          disabled={savingBatch || !batchDocenas}
+                          className="btn-primary flex-1 py-3 text-sm disabled:opacity-40">
+                          {savingBatch ? 'Guardando...' : 'Confirmar proceso'}
+                        </button>
+                        <button onClick={() => setProcessingBatch(null)}
+                          className="btn-secondary px-4 py-3 text-sm">
+                          Cancelar
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* ── Baja rápida ── */}
         <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden">
