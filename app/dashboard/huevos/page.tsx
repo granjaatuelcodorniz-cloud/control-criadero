@@ -131,6 +131,14 @@ export default function RegistroHuevos() {
 
   const [activeTab, setActiveTab] = useState<'consumo' | 'fertiles'>('consumo');
 
+  // Bandejas fértiles pendientes (owner)
+  type FertileBatch = { id: number; date: string; status: string };
+  const [pendingBatches, setPendingBatches] = useState<FertileBatch[]>([]);
+  const [processingBatch, setProcessingBatch] = useState<number | null>(null);
+  const [batchDocenas, setBatchDocenas] = useState('');
+  const [batchDescarte, setBatchDescarte] = useState('');
+  const [savingBatch, setSavingBatch] = useState(false);
+
   // Consumo
   const [dateConsumo, setDateConsumo] = useState(new Date().toISOString().split('T')[0]);
   const [bandejas, setBandejas] = useState<number | null>(null);
@@ -180,6 +188,16 @@ export default function RegistroHuevos() {
     setExisteFertiles(!!data);
   }, [user]);
 
+  const loadPendingBatches = useCallback(async () => {
+    if (!user) return;
+    const { data } = await supabase
+      .from('fertile_batches')
+      .select('id, date, status')
+      .eq('status', 'pendiente')
+      .order('date');
+    if (data) setPendingBatches(data);
+  }, [user]);
+
   useEffect(() => {
     if (!authLoading && !user) router.push('/');
   }, [user, authLoading, router]);
@@ -187,6 +205,10 @@ export default function RegistroHuevos() {
   useEffect(() => {
     checkExistingConsumo(dateConsumo);
   }, [dateConsumo, checkExistingConsumo]);
+
+  useEffect(() => {
+    if (activeTab === 'fertiles' && user) loadPendingBatches();
+  }, [activeTab, user]);
 
   useEffect(() => {
     checkExistingFertiles(dateFertiles);
@@ -275,6 +297,32 @@ export default function RegistroHuevos() {
     setLoading(false);
   };
 
+  const handleProcessBatch = async (batch: FertileBatch) => {
+    if (!batchDocenas || !user) return;
+    setSavingBatch(true);
+    await supabase.from('fertile_batches').update({
+      status: 'procesada',
+      docenas_seleccionadas: Number(batchDocenas),
+      descarte: Number(batchDescarte) || 0,
+      processed_at: new Date().toISOString().split('T')[0],
+      processed_by: user.id,
+    }).eq('id', batch.id);
+    await supabase.from('fertile_records').insert({
+      date: batch.date,
+      user_id: user.id,
+      bandejas_procesadas: 1,
+      docenas_seleccionadas: Number(batchDocenas),
+      descarte: Number(batchDescarte) || 0,
+      registered_at: new Date().toTimeString().split(' ')[0],
+    });
+    setProcessingBatch(null);
+    setBatchDocenas('');
+    setBatchDescarte('');
+    setSavingBatch(false);
+    showToast('Bandeja procesada');
+    await loadPendingBatches();
+  };
+
   return (
     <div className="min-h-screen bg-gray-50">
       <Toast message={toast} visible={toastVisible} />
@@ -355,64 +403,69 @@ export default function RegistroHuevos() {
           </form>
         )}
 
-        {/* ── Formulario Fértiles (solo owner) ── */}
+        {/* ── Tab Fértiles (solo owner) — bandejas pendientes ── */}
         {isOwner && activeTab === 'fertiles' && (
-          <form onSubmit={handleSubmitFertiles} className="space-y-4">
-
-            <div className="card">
-              <DatePicker value={dateFertiles} onChange={setDateFertiles} />
-            </div>
-
-            {existeFertiles && (
-              <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3">
-                <AlertCircle className="w-4 h-4 text-amber-500 shrink-0" />
-                <p className="text-sm text-amber-700 font-medium">
-                  Ya existe un registro de fértiles para este día. Podés igualmente guardar otro.
-                </p>
+          <div className="space-y-4">
+            {pendingBatches.length === 0 ? (
+              <div className="card text-center py-10">
+                <p className="text-gray-400 font-medium">No hay bandejas fértiles pendientes</p>
+                <p className="text-xs text-gray-300 mt-1">Se agregan al registrar huevos con bandejas de fértiles</p>
               </div>
+            ) : (
+              pendingBatches.map(batch => (
+                <div key={batch.id} className="card space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="font-bold text-gray-800">
+                        {new Date(batch.date + 'T12:00:00').toLocaleDateString('es-AR', {
+                          weekday: 'long', day: 'numeric', month: 'long'
+                        })}
+                      </p>
+                      <p className="text-xs text-amber-600 font-medium mt-0.5">Pendiente de procesar</p>
+                    </div>
+                    {processingBatch !== batch.id && (
+                      <button
+                        onClick={() => { setProcessingBatch(batch.id); setBatchDocenas(''); setBatchDescarte(''); }}
+                        className="px-4 py-2 bg-amber-400 hover:bg-amber-500 text-amber-950 font-bold text-sm rounded-xl transition-colors">
+                        Procesar
+                      </button>
+                    )}
+                  </div>
+
+                  {processingBatch === batch.id && (
+                    <div className="space-y-4 pt-3 border-t border-gray-100">
+                      <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Resultado del proceso</p>
+                      <Counter
+                        label="Docenas seleccionadas"
+                        sublabel="Las que quedaron aptas"
+                        value={batchDocenas === '' ? null : Number(batchDocenas)}
+                        onChange={v => setBatchDocenas(String(v))}
+                      />
+                      <Counter
+                        label="Descarte"
+                        sublabel="Rotos + no seleccionados (unidades)"
+                        value={batchDescarte === '' ? null : Number(batchDescarte)}
+                        onChange={v => setBatchDescarte(String(v))}
+                      />
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => handleProcessBatch(batch)}
+                          disabled={savingBatch || !batchDocenas}
+                          className="btn-primary flex-1 py-3 text-sm disabled:opacity-40">
+                          {savingBatch ? 'Guardando...' : 'Confirmar proceso'}
+                        </button>
+                        <button
+                          onClick={() => setProcessingBatch(null)}
+                          className="btn-secondary px-4 py-3 text-sm">
+                          Cancelar
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))
             )}
-
-            <div className="card space-y-5">
-              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Empaque fértiles</p>
-              <Counter
-                label="Bandejas procesadas"
-                sublabel="Las que entraron al proceso de selección"
-                value={bandProcesadas}
-                onChange={setBandProcesadas}
-              />
-              <Counter
-                label="Docenas seleccionadas"
-                sublabel="Las que quedaron aptas"
-                value={docenasFertiles}
-                onChange={setDocenasFertiles}
-              />
-              <Counter
-                label="Descarte"
-                sublabel="Rotos + no seleccionados (unidades)"
-                value={descarte}
-                onChange={setDescarte}
-              />
-            </div>
-
-            <div className="card">
-              <label className="text-sm font-medium text-gray-500 mb-2 block">Notas opcionales</label>
-              <textarea
-                value={notasFertiles}
-                onChange={e => setNotasFertiles(e.target.value)}
-                rows={3}
-                className="input-base resize-none"
-                placeholder="Observaciones del empaque..."
-              />
-            </div>
-
-            <button
-              type="submit"
-              disabled={loading || !fertilesValido}
-              className="btn-primary w-full py-4 text-base disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              {loading ? 'Guardando...' : 'Guardar empaque fértiles'}
-            </button>
-          </form>
+          </div>
         )}
       </div>
     </div>
