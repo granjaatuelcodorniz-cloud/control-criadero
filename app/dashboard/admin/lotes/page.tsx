@@ -471,7 +471,8 @@ function NewLotForm({
   const toggleRow = (row: string) => {
     setSelectedRows(prev => {
       const next = new Set(prev);
-      next.has(row) ? next.delete(row) : next.add(row);
+      if (next.has(row)) next.delete(row);
+      else next.add(row);
       return next;
     });
   };
@@ -815,7 +816,7 @@ export default function Lotes() {
     if (!user || !profile) { router.push('/'); return; }
     if (profile.role !== 'owner') { router.push('/dashboard'); return; }
     loadData();
-  }, [authLoading, user, profile]);
+  }, [authLoading, user, profile, router, loadData]);
 
   const flash = () => { setSaved(true); setTimeout(() => setSaved(false), 3000); };
 

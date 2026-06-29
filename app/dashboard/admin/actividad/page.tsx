@@ -23,8 +23,6 @@ type ActivityEvent = {
   user_name: string;
 };
 
-type Profile = { id: string; full_name: string };
-
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function extractTime(ts: string | null): string | null {
@@ -81,7 +79,6 @@ export default function Actividad() {
   const [selectedDate, setSelectedDate] = useState(getToday());
   const [events, setEvents] = useState<ActivityEvent[]>([]);
   const [filterType, setFilterType] = useState<EventType | 'all'>('all');
-  const [profiles, setProfiles] = useState<Profile[]>([]);
   const [loading, setLoading] = useState(false);
 
   const today = getToday();
@@ -89,23 +86,40 @@ export default function Actividad() {
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      // Cargar perfiles para mostrar nombres
-      const { data: profilesData } = await supabase
-        .from('profiles')
-        .select('id, full_name');
-      if (profilesData) setProfiles(profilesData);
+      // Las cinco fuentes son independientes: cargarlas en paralelo evita una
+      // cascada de round-trips antes de poder construir la actividad del día.
+      const [profilesRes, taskCompletionsRes, confirmationsRes, lossesRes, movementsRes] = await Promise.all([
+        supabase.from('profiles').select('id, full_name'),
+        supabase.from('task_completions')
+          .select('task_id, user_id, confirmed_at')
+          .eq('date', selectedDate),
+        supabase.from('treatment_confirmations')
+          .select('record_id, user_id, confirmed_at')
+          .eq('date', selectedDate),
+        supabase.from('lot_losses')
+          .select('id, lot_id, quantity, reason, loss_type, slot_code, user_id, created_at')
+          .eq('date', selectedDate),
+        supabase.from('stock_movements')
+          .select('id, stock_item_id, quantity, movement_type, notes, user_id, date')
+          .eq('date', selectedDate),
+      ]);
 
-      const profileMap = new Map((profilesData || []).map(p => [p.id, p.full_name]));
+      const queryError = [profilesRes, taskCompletionsRes, confirmationsRes, lossesRes, movementsRes]
+        .find(result => result.error)?.error;
+      if (queryError) throw queryError;
+
+      const profilesData = profilesRes.data || [];
+      const taskCompletions = taskCompletionsRes.data || [];
+      const confirmations = confirmationsRes.data || [];
+      const losses = lossesRes.data || [];
+      const movements = movementsRes.data || [];
+
+      const profileMap = new Map(profilesData.map(p => [p.id, p.full_name]));
       const allEvents: ActivityEvent[] = [];
 
       // ── 1. Tareas completadas ─────────────────────────────────────────────
-      const { data: taskCompletions } = await supabase
-        .from('task_completions')
-        .select('task_id, user_id, confirmed_at')
-        .eq('date', selectedDate);
-
-      if (taskCompletions && taskCompletions.length > 0) {
-        const taskIds = taskCompletions.map(tc => tc.task_id);
+      if (taskCompletions.length > 0) {
+        const taskIds = [...new Set(taskCompletions.map(tc => tc.task_id))];
         const { data: tasksData } = await supabase
           .from('tasks')
           .select('id, description, type')
@@ -129,27 +143,25 @@ export default function Actividad() {
       }
 
       // ── 2. Tratamientos confirmados ───────────────────────────────────────
-      const { data: confirmations } = await supabase
-        .from('treatment_confirmations')
-        .select('record_id, user_id, confirmed_at')
-        .eq('date', selectedDate);
-
-      if (confirmations && confirmations.length > 0) {
-        const recordIds = confirmations.map(c => c.record_id);
+      if (confirmations.length > 0) {
+        const recordIds = [...new Set(confirmations.map(c => c.record_id))];
         const { data: records } = await supabase
           .from('health_records')
           .select('id, type, health_product_id, dose_applied, water_liters, lot_id')
           .in('id', recordIds);
 
-        const productIds = (records || []).map(r => r.health_product_id).filter(Boolean);
-        const { data: productsData } = productIds.length > 0
-          ? await supabase.from('health_products').select('id, name, unit').in('id', productIds)
-          : { data: [] };
-
-        const lotIds = (records || []).map(r => r.lot_id).filter(Boolean);
-        const { data: lotsData } = lotIds.length > 0
-          ? await supabase.from('lots').select('id, code').in('id', lotIds)
-          : { data: [] };
+        const productIds = [...new Set((records || []).map(r => r.health_product_id).filter(Boolean))];
+        const lotIds = [...new Set((records || []).map(r => r.lot_id).filter(Boolean))];
+        const [productsRes, lotsRes] = await Promise.all([
+          productIds.length > 0
+            ? supabase.from('health_products').select('id, name, unit').in('id', productIds)
+            : Promise.resolve({ data: [] }),
+          lotIds.length > 0
+            ? supabase.from('lots').select('id, code').in('id', lotIds)
+            : Promise.resolve({ data: [] }),
+        ]);
+        const productsData = productsRes.data;
+        const lotsData = lotsRes.data;
 
         const recordMap = new Map((records || []).map(r => [r.id, r]));
         const productMap = new Map((productsData || []).map(p => [p.id, p]));
@@ -179,13 +191,8 @@ export default function Actividad() {
       }
 
       // ── 3. Bajas de aves ──────────────────────────────────────────────────
-      const { data: losses } = await supabase
-        .from('lot_losses')
-        .select('id, lot_id, quantity, reason, loss_type, slot_code, user_id, created_at')
-        .eq('date', selectedDate);
-
-      if (losses && losses.length > 0) {
-        const lotIds2 = losses.map(l => l.lot_id).filter(Boolean);
+      if (losses.length > 0) {
+        const lotIds2 = [...new Set(losses.map(l => l.lot_id).filter(Boolean))];
         const { data: lotsData2 } = lotIds2.length > 0
           ? await supabase.from('lots').select('id, code').in('id', lotIds2)
           : { data: [] };
@@ -196,7 +203,7 @@ export default function Actividad() {
         losses.forEach(l => {
           const lot = l.lot_id ? lotMap2.get(l.lot_id) : null;
           const typeLabel = lossTypeLabel[l.loss_type] || l.loss_type;
-          let description = `${typeLabel} — ${l.quantity} ave${l.quantity > 1 ? 's' : ''}`;
+          const description = `${typeLabel} — ${l.quantity} ave${l.quantity > 1 ? 's' : ''}`;
           let detail = lot ? lot.code : 'Sin lote';
           if (l.slot_code) detail += ` · Boca ${l.slot_code}`;
           if (l.reason) detail += ` · ${l.reason}`;
@@ -213,13 +220,8 @@ export default function Actividad() {
       }
 
       // ── 4. Movimientos de insumos ─────────────────────────────────────────
-      const { data: movements } = await supabase
-        .from('stock_movements')
-        .select('id, stock_item_id, quantity, movement_type, notes, user_id, date')
-        .eq('date', selectedDate);
-
-      if (movements && movements.length > 0) {
-        const itemIds = movements.map(m => m.stock_item_id).filter(Boolean);
+      if (movements.length > 0) {
+        const itemIds = [...new Set(movements.map(m => m.stock_item_id).filter(Boolean))];
         const { data: itemsData } = itemIds.length > 0
           ? await supabase.from('stock_items').select('id, name, unit').in('id', itemIds)
           : { data: [] };
@@ -262,7 +264,7 @@ export default function Actividad() {
     if (!user || !profile) { router.push('/'); return; }
     if (profile.role !== 'owner') { router.push('/dashboard'); return; }
     loadData();
-  }, [authLoading, user, profile, selectedDate]);
+  }, [authLoading, user, profile, router, loadData]);
 
   if (authLoading) return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center">

@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "eslint .",
+    "check": "eslint . && tsc --noEmit && next build"
   },
   "dependencies": {
     "@supabase/ssr": "^0.10.2",

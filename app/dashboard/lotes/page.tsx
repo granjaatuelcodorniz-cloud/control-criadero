@@ -498,7 +498,7 @@ export default function LotesColaboradora() {
     if (!user || !profile) { router.push('/'); return; }
     if (profile.role === 'owner') { router.push('/dashboard/admin'); return; }
     loadData();
-  }, [authLoading, user, profile]);
+  }, [authLoading, user, profile, router, loadData]);
 
   const flash = () => { setSaved(true); setTimeout(() => setSaved(false), 3000); };
 

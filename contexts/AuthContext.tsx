@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useEffect, useState, useRef, useMemo } from 'react';
+import { createContext, useCallback, useContext, useEffect, useState, useRef, useMemo } from 'react';
 import { createClient } from '@/lib/supabase';
 import { User } from '@supabase/supabase-js';
 import { useRouter } from 'next/navigation';
@@ -35,31 +35,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Garantiza que onAuthStateChange no interfiere mientras init() corre.
   const initialized = useRef(false);
 
-  const fetchProfile = async (userId: string): Promise<Profile | null> => {
-    try {
-      const { data } = await supabase
-        .from('profiles')
-        .select('full_name, role')
-        .eq('id', userId)
-        .single();
-      if (data) {
-        setProfile(data);
-        return data;
-      }
-      return null;
-    } catch (error) {
+  const fetchProfile = useCallback(async (userId: string): Promise<Profile | null> => {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('full_name, role')
+      .eq('id', userId)
+      .single();
+
+    if (error) {
       console.error('Error cargando perfil:', error);
       return null;
     }
-  };
 
-  const redirectByRole = (role: Profile['role']) => {
+    setProfile(data);
+    return data;
+  }, [supabase]);
+
+  const redirectByRole = useCallback((role: Profile['role']) => {
     if (role === 'owner') {
-      router.push('/dashboard/admin');
+      router.replace('/dashboard/admin');
     } else {
-      router.push('/dashboard');
+      router.replace('/dashboard');
     }
-  };
+  }, [router]);
 
   useEffect(() => {
     let mounted = true;
@@ -90,7 +88,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (event === 'SIGNED_OUT') {
           setUser(null);
           setProfile(null);
-          router.push('/');
+          router.replace('/');
           return;
         }
 
@@ -120,17 +118,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       mounted = false;
       subscription.unsubscribe();
     };
-  }, [supabase, router]);
+  }, [supabase, router, fetchProfile, redirectByRole]);
 
-  const handleLogout = async () => {
+  const handleLogout = useCallback(async () => {
     setUser(null);
     setProfile(null);
     await supabase.auth.signOut();
-    router.push('/');
-  };
+    router.replace('/');
+  }, [router, supabase]);
+
+  const value = useMemo(
+    () => ({ user, profile, loading, signOut: handleLogout }),
+    [user, profile, loading, handleLogout],
+  );
 
   return (
-    <AuthContext.Provider value={{ user, profile, loading, signOut: handleLogout }}>
+    <AuthContext.Provider value={value}>
       {children}
     </AuthContext.Provider>
   );

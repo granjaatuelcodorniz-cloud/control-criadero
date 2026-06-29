@@ -239,7 +239,7 @@ export default function Sanidad() {
     if (!user || !profile) { router.push('/'); return; }
     if (profile.role !== 'owner') { router.push('/dashboard'); return; }
     loadData();
-  }, [authLoading, user, profile]);
+  }, [authLoading, user, profile, router, loadData]);
 
   // ── Calculadora de dosis ────────────────────────────────────────────────────
   useEffect(() => {
@@ -754,7 +754,7 @@ export default function Sanidad() {
                       </div>
                     )}
                     {r.notes && (
-                      <p className="text-sm text-gray-600 leading-relaxed bg-gray-50/50 p-3 rounded-2xl italic">"{r.notes}"</p>
+                      <p className="text-sm text-gray-600 leading-relaxed bg-gray-50/50 p-3 rounded-2xl italic">&ldquo;{r.notes}&rdquo;</p>
                     )}
                     {r.next_application && (
                       <div className={`flex items-center justify-between gap-2 text-xs font-bold p-3 rounded-2xl border

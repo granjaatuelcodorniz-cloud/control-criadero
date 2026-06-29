@@ -9,21 +9,6 @@ import { Search, Calendar, TrendingUp, Skull } from 'lucide-react';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type DailyRecord = {
-  date: string;
-  bandejas_consumo: number;
-  bandejas_fertiles: number;
-  docenas_armadas: number;
-  huevos_rotos: number;
-  notas: string | null;
-};
-
-type FertileRecord = {
-  date: string;
-  docenas_seleccionadas: number;
-  descarte: number;
-};
-
 type Loss = {
   date: string;
   quantity: number;
@@ -243,27 +228,9 @@ export default function Analisis() {
   });
   const [monthDays, setMonthDays] = useState<DayFull[]>([]);
   const [monthLosses, setMonthLosses] = useState(0);
+  const [baseDataReady, setBaseDataReady] = useState(false);
 
   const [loading, setLoading] = useState(false);
-
-  // ── Init ────────────────────────────────────────────────────────────────────
-  useEffect(() => {
-    if (authLoading) return;
-    if (!user || !profile) { router.push('/'); return; }
-    if (profile.role !== 'owner') { router.push('/dashboard'); return; }
-
-    const init = async () => {
-      const [slotsRes, lossesRes] = await Promise.all([
-        supabase.from('cage_slots').select('quantity'),
-        supabase.from('lot_losses').select('date, quantity'),
-      ]);
-      const aves = slotsRes.data?.reduce((s, sl) => s + sl.quantity, 0) || 0;
-      setAvesActuales(aves);
-      setAllLosses(lossesRes.data || []);
-      await loadMonth(selectedMonth, aves, lossesRes.data || []);
-    };
-    init();
-  }, [authLoading, user, profile]);
 
   // ── Cargar mes ──────────────────────────────────────────────────────────────
   const loadMonth = useCallback(async (month: string, aves: number, losses: Loss[]) => {
@@ -288,9 +255,32 @@ export default function Analisis() {
     setMonthLosses(lossesMonthRes.data?.reduce((s, l) => s + l.quantity, 0) || 0);
   }, []);
 
-  const handleMonthChange = async (month: string) => {
+  // ── Init ────────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (authLoading) return;
+    if (!user || !profile) { router.push('/'); return; }
+    if (profile.role !== 'owner') { router.push('/dashboard'); return; }
+
+    const init = async () => {
+      const [slotsRes, lossesRes] = await Promise.all([
+        supabase.from('cage_slots').select('quantity'),
+        supabase.from('lot_losses').select('date, quantity'),
+      ]);
+      const aves = slotsRes.data?.reduce((s, sl) => s + sl.quantity, 0) || 0;
+      setAvesActuales(aves);
+      setAllLosses(lossesRes.data || []);
+      setBaseDataReady(true);
+    };
+    void init();
+  }, [authLoading, user, profile, router]);
+
+  useEffect(() => {
+    if (!baseDataReady) return;
+    void loadMonth(selectedMonth, avesActuales, allLosses);
+  }, [baseDataReady, selectedMonth, avesActuales, allLosses, loadMonth]);
+
+  const handleMonthChange = (month: string) => {
     setSelectedMonth(month);
-    await loadMonth(month, avesActuales, allLosses);
   };
 
   // ── Búsqueda día ────────────────────────────────────────────────────────────

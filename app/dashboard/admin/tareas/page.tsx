@@ -82,7 +82,7 @@ export default function Tareas() {
     if (!user || !profile) { router.push('/'); return; }
     if (profile.role !== 'owner') { router.push('/dashboard'); return; }
     loadData();
-  }, [authLoading, user, profile]);
+  }, [authLoading, user, profile, router, loadData]);
 
   // ── Crear tarea ─────────────────────────────────────────────────────────────
   const handleSave = async () => {

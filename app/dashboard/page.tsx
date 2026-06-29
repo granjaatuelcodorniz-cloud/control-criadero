@@ -207,7 +207,7 @@ export default function Dashboard() {
     if (!user || !profile) { router.push('/'); return; }
     if (profile.role === 'owner') { router.push('/dashboard/admin'); return; }
     loadData();
-  }, [authLoading, user, profile]);
+  }, [authLoading, user, profile, router, loadData]);
 
   // ── Toggle tarea ────────────────────────────────────────────────────────────
   const toggleTask = async (task: Task) => {

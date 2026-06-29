@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import { useRouter } from 'next/navigation';
@@ -67,7 +67,7 @@ export default function AdminDashboard() {
   const [batchDescarte, setBatchDescarte] = useState('');
   const [savingBatch, setSavingBatch] = useState(false);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     try {
       const sevenDaysAgo = new Date();
       sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
@@ -132,7 +132,7 @@ export default function AdminDashboard() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [today]);
 
   useEffect(() => {
     if (authLoading) return;
@@ -144,7 +144,7 @@ export default function AdminDashboard() {
     };
     document.addEventListener('visibilitychange', handleVisible);
     return () => document.removeEventListener('visibilitychange', handleVisible);
-  }, [authLoading, user, profile]);
+  }, [authLoading, user, profile, router, load]);
 
   // ── Baja rápida ─────────────────────────────────────────────────────────────
   const handleQuickLookup = () => {

@@ -207,7 +207,7 @@ export default function Stock() {
     if (!user || !profile) { router.push('/'); return; }
     if (profile.role !== 'owner') { router.push('/dashboard'); return; }
     loadData();
-  }, [authLoading, user, profile]);
+  }, [authLoading, user, profile, router, loadData]);
 
   // ── Alimento: abrir bolsa ───────────────────────────────────────────────────
   const handleOpenBolsa = async (feedItem: StockItem) => {

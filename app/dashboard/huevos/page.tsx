@@ -148,14 +148,6 @@ export default function RegistroHuevos() {
   const [notasConsumo, setNotasConsumo] = useState('');
   const [existeConsumo, setExisteConsumo] = useState(false);
 
-  // Fértiles
-  const [dateFertiles, setDateFertiles] = useState(new Date().toISOString().split('T')[0]);
-  const [bandProcesadas, setBandProcesadas] = useState<number | null>(null);
-  const [docenasFertiles, setDocenasFertiles] = useState<number | null>(null);
-  const [descarte, setDescarte] = useState<number | null>(null);
-  const [notasFertiles, setNotasFertiles] = useState('');
-  const [existeFertiles, setExisteFertiles] = useState(false);
-
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState('');
   const [toastVisible, setToastVisible] = useState(false);
@@ -175,17 +167,6 @@ export default function RegistroHuevos() {
       .eq('user_id', user.id)
       .maybeSingle();
     setExisteConsumo(!!data);
-  }, [user]);
-
-  const checkExistingFertiles = useCallback(async (date: string) => {
-    if (!user) return;
-    const { data } = await supabase
-      .from('fertile_records')
-      .select('id')
-      .eq('date', date)
-      .eq('user_id', user.id)
-      .maybeSingle();
-    setExisteFertiles(!!data);
   }, [user]);
 
   const loadPendingBatches = useCallback(async () => {
@@ -208,11 +189,7 @@ export default function RegistroHuevos() {
 
   useEffect(() => {
     if (activeTab === 'fertiles' && user) loadPendingBatches();
-  }, [activeTab, user]);
-
-  useEffect(() => {
-    checkExistingFertiles(dateFertiles);
-  }, [dateFertiles, checkExistingFertiles]);
+  }, [activeTab, user, loadPendingBatches]);
 
   if (authLoading) return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center">
@@ -225,8 +202,6 @@ export default function RegistroHuevos() {
   const isOwner = profile.role === 'owner';
 
   const consumoValido = (bandejas ?? 0) > 0 || (bandFertiles ?? 0) > 0 || (docenas ?? 0) > 0 || (rotos ?? 0) > 0;
-  const fertilesValido = (bandProcesadas ?? 0) > 0 || (docenasFertiles ?? 0) > 0 || (descarte ?? 0) > 0;
-
   const handleSubmitConsumo = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!consumoValido || !user) return;
@@ -262,35 +237,6 @@ export default function RegistroHuevos() {
       setNotasConsumo('');
       setDateConsumo(new Date().toISOString().split('T')[0]);
       setExisteConsumo(true);
-    } else {
-      alert('Error al guardar: ' + error.message);
-    }
-    setLoading(false);
-  };
-
-  const handleSubmitFertiles = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!fertilesValido || !user) return;
-    setLoading(true);
-    const now = new Date();
-    const { error } = await supabase.from('fertile_records').insert({
-      date: dateFertiles,
-      user_id: user.id,
-      bandejas_procesadas: bandProcesadas ?? 0,
-      docenas_seleccionadas: docenasFertiles ?? 0,
-      descarte: descarte ?? 0,
-      notas: notasFertiles.trim() || null,
-      registered_at: now.toTimeString().split(' ')[0],
-    });
-
-    if (!error) {
-      showToast('Registro de fértiles guardado');
-      setBandProcesadas(null);
-      setDocenasFertiles(null);
-      setDescarte(null);
-      setNotasFertiles('');
-      setDateFertiles(new Date().toISOString().split('T')[0]);
-      setExisteFertiles(true);
     } else {
       alert('Error al guardar: ' + error.message);
     }
