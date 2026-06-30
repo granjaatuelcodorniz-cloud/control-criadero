@@ -39,3 +39,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# notas de traspaso entre sesiones (no se versiona)
+HANDOFF.md
