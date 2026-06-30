@@ -9,8 +9,8 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { getToday } from '@/lib/date';
 import {
-  Egg, CheckSquare, AlertTriangle, ClipboardList,
-  Plus, X, Bird, FlaskConical, Check,
+  Egg, AlertTriangle, ClipboardList,
+  Plus, X, FlaskConical, Check, ChevronRight, PackageCheck,
 } from 'lucide-react';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -83,6 +83,26 @@ function tipoColor(t: string) {
   }
 }
 
+// Anillo de progreso del día (tareas diarias + huevos).
+function ProgressRing({ done, total }: { done: number; total: number }) {
+  const r = 27;
+  const circ = 2 * Math.PI * r;
+  const pct = total > 0 ? done / total : 0;
+  return (
+    <div className="relative w-16 h-16 shrink-0">
+      <svg viewBox="0 0 64 64" className="w-16 h-16">
+        <circle cx="32" cy="32" r={r} fill="none" stroke="#f3f4f6" strokeWidth="7" />
+        <circle cx="32" cy="32" r={r} fill="none" stroke="#facc15" strokeWidth="7" strokeLinecap="round"
+          strokeDasharray={circ} strokeDashoffset={circ * (1 - pct)} transform="rotate(-90 32 32)"
+          className="transition-all duration-500" />
+      </svg>
+      <div className="absolute inset-0 flex items-center justify-center">
+        <span className="text-lg font-bold text-gray-900">{done}/{total}</span>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main Dashboard ───────────────────────────────────────────────────────────
 
 export default function Dashboard() {
@@ -100,6 +120,8 @@ export default function Dashboard() {
   const [products, setProducts] = useState<HealthProduct[]>([]);
   const [lots, setLots] = useState<Lot[]>([]);
   const [slots, setSlots] = useState<CageSlot[]>([]);
+  const [recoleccionHoy, setRecoleccionHoy] = useState(false);
+  const [bandejasPorEmpacar, setBandejasPorEmpacar] = useState(0);
 
   const [stockSaved, setStockSaved] = useState(false);
   const [savingStock, setSavingStock] = useState(false);
@@ -135,7 +157,12 @@ export default function Dashboard() {
         await supabase.from('tasks').update({ is_active: false }).in('id', oldIds).eq('type', 'custom');
       }
 
-      const [tasksRes, completionsRes, slotsRes, stockRes, recordsRes, productsRes, lotsRes, confirmRes] = await Promise.all([
+      // Ventana de 14 días para calcular las bandejas de consumo que faltan empacar.
+      const desde = new Date();
+      desde.setDate(desde.getDate() - 14);
+      const desde14 = desde.toISOString().split('T')[0];
+
+      const [tasksRes, completionsRes, slotsRes, stockRes, recordsRes, productsRes, lotsRes, confirmRes, recRes, empRes] = await Promise.all([
         supabase.from('tasks').select('id, description, type, frequency_days, next_execution, is_urgent')
           .eq('is_active', true)
           .or(`assigned_to.is.null,assigned_to.eq.${user.id}`)
@@ -148,7 +175,21 @@ export default function Dashboard() {
         supabase.from('health_products').select('id, name, unit'),
         supabase.from('lots').select('id, code, current_quantity').eq('status', 'activo'),
         supabase.from('treatment_confirmations').select('record_id').eq('date', today),
+        supabase.from('daily_records').select('date, bandejas_consumo').gte('date', desde14),
+        supabase.from('consumo_empaque').select('date, bandejas').gte('date', desde14),
       ]);
+
+      // Estado de huevos: ¿se cargó recolección hoy? ¿cuántas bandejas faltan empacar?
+      const recRows = recRes.data ?? [];
+      const empRows = empRes.data ?? [];
+      setRecoleccionHoy(recRows.some(r => r.date === today));
+      const recoPorDia = new Map<string, number>();
+      const empPorDia = new Map<string, number>();
+      recRows.forEach(r => recoPorDia.set(r.date, (recoPorDia.get(r.date) ?? 0) + (r.bandejas_consumo ?? 0)));
+      empRows.forEach(e => empPorDia.set(e.date, (empPorDia.get(e.date) ?? 0) + (e.bandejas ?? 0)));
+      let porEmpacar = 0;
+      recoPorDia.forEach((reco, date) => { porEmpacar += Math.max(0, reco - (empPorDia.get(date) ?? 0)); });
+      setBandejasPorEmpacar(porEmpacar);
 
       if (tasksRes.data) {
         setDailyTasks(tasksRes.data.filter(t => t.type === 'daily'));
@@ -292,8 +333,11 @@ export default function Dashboard() {
 
   if (!profile) return null;
 
-  const totalTasks = dailyTasks.length + periodicTasks.length + customTasks.length;
-  const doneTasks = completedIds.length;
+  // "Cosas de hoy" = tareas diarias + cargar huevos (alimenta el anillo de progreso).
+  const dailyDone = dailyTasks.filter(t => completedIds.includes(t.id)).length;
+  const cosasHechas = dailyDone + (recoleccionHoy ? 1 : 0);
+  const cosasTotal = dailyTasks.length + 1;
+  const restan = cosasTotal - cosasHechas;
   const feedItems = stockItems.filter(i => i.is_feed);
   const otherItems = stockItems.filter(i => !i.is_feed);
   const allTreatmentsConfirmed = activeTreatments.length > 0 &&
@@ -333,41 +377,61 @@ export default function Dashboard() {
 
       <div className="max-w-xl mx-auto px-4 py-6 space-y-6">
 
-        {/* Greeting */}
-        <div>
-          <h2 className="text-2xl font-bold text-gray-900">Hola, {profile.full_name} 👋</h2>
-          <p className="text-gray-500 text-sm mt-1">
-            {new Date().toLocaleDateString('es-AR', { weekday: 'long', day: 'numeric', month: 'long' })}
-          </p>
-          <div className="mt-3 bg-white rounded-2xl border border-gray-200 p-4">
-            <div className="flex justify-between text-sm mb-2">
-              <span className="text-gray-600">Progreso del día</span>
-              <span className="font-medium">{doneTasks}/{totalTasks} tareas</span>
-            </div>
-            <div className="w-full bg-gray-100 rounded-full h-2">
-              <div className="bg-yellow-400 h-2 rounded-full transition-all"
-                style={{ width: totalTasks > 0 ? `${Math.round((doneTasks / totalTasks) * 100)}%` : '0%' }} />
-            </div>
+        {/* Progreso del día */}
+        <div className="bg-white rounded-2xl border border-gray-200 p-4 flex items-center gap-4">
+          <ProgressRing done={cosasHechas} total={cosasTotal} />
+          <div className="flex-1 min-w-0">
+            <h2 className="text-lg font-bold text-gray-900 truncate">Hola, {profile.full_name}</h2>
+            <p className="text-xs text-gray-400 mt-0.5 capitalize">
+              {new Date().toLocaleDateString('es-AR', { weekday: 'long', day: 'numeric', month: 'long' })}
+              {totalAvesActivas > 0 && ` · ${totalAvesActivas} aves`}
+            </p>
+            <p className="text-sm text-gray-600 mt-1.5">
+              {restan > 0 ? `Te queda${restan > 1 ? 'n' : ''} ${restan} cosa${restan > 1 ? 's' : ''} por hacer hoy` : '¡Todo hecho por hoy! 🎉'}
+            </p>
           </div>
         </div>
 
-        {/* CTAs principales */}
-        <div className="grid grid-cols-2 gap-3">
-          <Link href="/dashboard/huevos"
-            className="btn-primary py-5 rounded-2xl flex flex-col items-center gap-2 text-sm font-bold">
-            <Egg className="w-6 h-6" />
-            Registrar huevos
-          </Link>
-          <Link href="/dashboard/lotes"
-            className="bg-white border-2 border-gray-200 hover:border-yellow-300 hover:bg-yellow-50/40 transition-all py-5 rounded-2xl flex flex-col items-center gap-2 text-sm font-bold text-gray-600 relative">
-            <Bird className="w-6 h-6" />
-            Aves
-            {totalAvesActivas > 0 && (
-              <span className="absolute top-2 right-2 text-[10px] font-black text-yellow-700 bg-yellow-100 px-1.5 py-0.5 rounded-full">
-                {totalAvesActivas}
-              </span>
+        {/* Tareas de hoy: huevos destacado + checklist diario */}
+        <div>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-semibold text-gray-700 text-sm uppercase tracking-wide">Tareas de hoy</h3>
+            <span className="text-xs text-gray-400">{cosasHechas} de {cosasTotal} hechas</span>
+          </div>
+          <div className="space-y-2">
+            {!recoleccionHoy ? (
+              <Link href="/dashboard/huevos"
+                className="flex items-center gap-3 p-4 rounded-2xl border bg-yellow-50 border-yellow-200 active:scale-[0.99] transition-all">
+                <Egg className="w-6 h-6 text-yellow-600 shrink-0" />
+                <div className="flex-1">
+                  <p className="text-base font-semibold text-yellow-800">Cargar huevos de hoy</p>
+                  <p className="text-xs text-yellow-700/80 mt-0.5">Todavía no registraste la recolección</p>
+                </div>
+                <ChevronRight className="w-5 h-5 text-yellow-500" />
+              </Link>
+            ) : bandejasPorEmpacar > 0 ? (
+              <Link href="/dashboard/huevos"
+                className="flex items-center gap-3 p-4 rounded-2xl border bg-amber-50 border-amber-200 active:scale-[0.99] transition-all">
+                <PackageCheck className="w-6 h-6 text-amber-600 shrink-0" />
+                <div className="flex-1">
+                  <p className="text-base font-semibold text-amber-800">
+                    {bandejasPorEmpacar} bandeja{bandejasPorEmpacar > 1 ? 's' : ''} para empacar
+                  </p>
+                  <p className="text-xs text-amber-700/80 mt-0.5">Recolección cargada · falta el empaque</p>
+                </div>
+                <ChevronRight className="w-5 h-5 text-amber-500" />
+              </Link>
+            ) : (
+              <div className="flex items-center gap-3 p-4 rounded-2xl border bg-green-50 border-green-200">
+                <Check className="w-6 h-6 text-green-600 shrink-0" />
+                <div className="flex-1">
+                  <p className="text-base font-semibold text-green-800">Huevos al día</p>
+                  <p className="text-xs text-green-700/80 mt-0.5">Recolección y empaque completos</p>
+                </div>
+              </div>
             )}
-          </Link>
+            {dailyTasks.map(t => <TaskItem key={t.id} task={t} />)}
+          </div>
         </div>
 
         {/* ── Tratamientos activos ── */}
@@ -450,17 +514,6 @@ export default function Dashboard() {
                 );
               })}
             </div>
-          </div>
-        )}
-
-        {/* Tareas diarias */}
-        {dailyTasks.length > 0 && (
-          <div>
-            <div className="flex items-center gap-2 mb-3">
-              <CheckSquare className="w-4 h-4 text-yellow-500" />
-              <h3 className="font-semibold text-gray-700 text-sm uppercase tracking-wide">Tareas diarias</h3>
-            </div>
-            <div className="space-y-2">{dailyTasks.map(t => <TaskItem key={t.id} task={t} />)}</div>
           </div>
         )}
 

@@ -54,18 +54,18 @@ function avesEnFecha(fecha: string, avesActuales: number, losses: Loss[]): numbe
   return avesActuales + bajasPosteriores;
 }
 
-// Agrupa daily_records por fecha sumando valores
+// Agrupa los empaques de consumo (consumo_empaque) por fecha sumando valores
 function groupConsumo(
-  records: { date: string; docenas_armadas: number; huevos_rotos: number }[]
+  records: { date: string; docenas: number; rotos: number }[]
 ): Map<string, { docenas: number; rotos: number }> {
   const map = new Map<string, { docenas: number; rotos: number }>();
   for (const r of records) {
     const ex = map.get(r.date);
     if (ex) {
-      ex.docenas += r.docenas_armadas;
-      ex.rotos += r.huevos_rotos;
+      ex.docenas += r.docenas;
+      ex.rotos += r.rotos;
     } else {
-      map.set(r.date, { docenas: r.docenas_armadas, rotos: r.huevos_rotos });
+      map.set(r.date, { docenas: r.docenas, rotos: r.rotos });
     }
   }
   return map;
@@ -240,7 +240,7 @@ export default function Analisis() {
     const to = `${year}-${mon}-${String(lastDay).padStart(2, '0')}`;
 
     const [consumoRes, fertilesRes, lossesMonthRes] = await Promise.all([
-      supabase.from('daily_records').select('date, docenas_armadas, huevos_rotos')
+      supabase.from('consumo_empaque').select('date, docenas, rotos')
         .gte('date', from).lte('date', to),
       supabase.from('fertile_records').select('date, docenas_seleccionadas, descarte')
         .gte('date', from).lte('date', to),
@@ -288,11 +288,12 @@ export default function Analisis() {
     setLoading(true);
     setDaySearched(true);
 
-    const [consumoRes, fertilesRes] = await Promise.all([
-      supabase.from('daily_records').select('date, docenas_armadas, huevos_rotos, notas')
+    const [consumoRes, fertilesRes, notasRes] = await Promise.all([
+      supabase.from('consumo_empaque').select('date, docenas, rotos')
         .eq('date', searchDate),
       supabase.from('fertile_records').select('date, docenas_seleccionadas, descarte')
         .eq('date', searchDate),
+      supabase.from('daily_records').select('notas').eq('date', searchDate),
     ]);
 
     const consumoMap = groupConsumo(consumoRes.data || []);
@@ -305,7 +306,7 @@ export default function Analisis() {
       const days = buildDaysFull(consumoMap, fertilesMap, avesActuales, allLosses);
       setDayData(days[0] || null);
       setDayNotes(
-        (consumoRes.data || []).map(r => r.notas).filter((n): n is string => !!n)
+        (notasRes.data || []).map(r => r.notas).filter((n): n is string => !!n)
       );
     }
     setLoading(false);
@@ -317,7 +318,7 @@ export default function Analisis() {
     setRangeSearched(true);
 
     const [consumoRes, fertilesRes] = await Promise.all([
-      supabase.from('daily_records').select('date, docenas_armadas, huevos_rotos')
+      supabase.from('consumo_empaque').select('date, docenas, rotos')
         .gte('date', dateFrom).lte('date', dateTo),
       supabase.from('fertile_records').select('date, docenas_seleccionadas, descarte')
         .gte('date', dateFrom).lte('date', dateTo),

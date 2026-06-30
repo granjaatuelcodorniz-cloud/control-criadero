@@ -61,10 +61,10 @@ export default function AdminDashboard() {
       const sevenDaysAgo = new Date();
       sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
 
-      const [todayRes, fertileRes, weekRes, slotsRes, lotsRes, stockRes, tasksRes, healthRes, batchesRes] = await Promise.all([
-        supabase.from('daily_records').select('*').eq('date', today).order('created_at', { ascending: false }).limit(1),
+      const [weekRes, empRes, fertileRes, slotsRes, lotsRes, stockRes, tasksRes, healthRes, batchesRes] = await Promise.all([
+        supabase.from('daily_records').select('date, registered_at, bandejas_consumo, bandejas_fertiles, notas').gte('date', toDateStr(sevenDaysAgo)).order('date'),
+        supabase.from('consumo_empaque').select('date, bandejas, docenas, rotos').gte('date', toDateStr(sevenDaysAgo)),
         supabase.from('fertile_records').select('*').eq('date', today).order('created_at', { ascending: false }).limit(1),
-        supabase.from('daily_records').select('date, registered_at, bandejas_consumo, bandejas_fertiles, docenas_armadas, huevos_rotos, notas').gte('date', toDateStr(sevenDaysAgo)).order('date'),
         supabase.from('cage_slots').select('id, lot_id, slot_code, quantity'),
         supabase.from('lots').select('id, code, current_quantity').eq('status', 'activo'),
         supabase.from('stock_items').select('name, unit, current_quantity, alert_threshold'),
@@ -74,9 +74,36 @@ export default function AdminDashboard() {
         supabase.from('fertile_batches').select('*').eq('status', 'pendiente').order('date'),
       ]);
 
-      if (todayRes.data?.[0]) setTodayRecord(todayRes.data[0]);
       if (fertileRes.data?.[0]) setTodayFertile(fertileRes.data[0]);
-      if (weekRes.data) setWeekRecords(weekRes.data);
+
+      // docenas/rotos ahora viven en consumo_empaque; las sumamos por fecha.
+      const empByDate = new Map<string, { docenas: number; rotos: number }>();
+      (empRes.data ?? []).forEach(e => {
+        const cur = empByDate.get(e.date) ?? { docenas: 0, rotos: 0 };
+        cur.docenas += e.docenas ?? 0;
+        cur.rotos += e.rotos ?? 0;
+        empByDate.set(e.date, cur);
+      });
+      // Puede haber varias recolecciones por día: sumamos daily_records por fecha.
+      const byDate = new Map<string, DailyRecord>();
+      (weekRes.data ?? []).forEach(r => {
+        const cur = byDate.get(r.date) ?? {
+          date: r.date, registered_at: r.registered_at,
+          bandejas_consumo: 0, bandejas_fertiles: 0,
+          docenas_armadas: 0, huevos_rotos: 0, notas: r.notas,
+        };
+        cur.bandejas_consumo += r.bandejas_consumo ?? 0;
+        cur.bandejas_fertiles += r.bandejas_fertiles ?? 0;
+        if (!cur.notas && r.notas) cur.notas = r.notas;
+        if (r.registered_at && (!cur.registered_at || r.registered_at < cur.registered_at)) cur.registered_at = r.registered_at;
+        byDate.set(r.date, cur);
+      });
+      byDate.forEach((rec, date) => {
+        const emp = empByDate.get(date);
+        if (emp) { rec.docenas_armadas = emp.docenas; rec.huevos_rotos = emp.rotos; }
+      });
+      setWeekRecords([...byDate.values()].sort((a, b) => a.date.localeCompare(b.date)));
+      setTodayRecord(byDate.get(today) ?? null);
       if (slotsRes.data) {
         setSlots(slotsRes.data);
         setTotalAves(slotsRes.data.reduce((s, sl) => s + sl.quantity, 0));
