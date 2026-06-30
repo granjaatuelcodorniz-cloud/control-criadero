@@ -5,6 +5,8 @@ import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
 import Header from '@/components/Header';
 import { useRouter } from 'next/navigation';
+import { ToastViewport, useToast } from '@/components/Feedback';
+import { assertSupabaseAllOk, getErrorMessage } from '@/lib/supabase-ops';
 import {
   X, ChevronDown, ChevronUp, Skull,
   AlertCircle, ArrowLeftRight, MoveRight,
@@ -476,7 +478,7 @@ export default function LotesColaboradora() {
   const [reorderPair, setReorderPair] = useState<{ origin: CageSlot; destination: CageSlot; isNewSlot: boolean } | null>(null);
 
   const [loading, setLoading] = useState(false);
-  const [saved, setSaved] = useState(false);
+  const { toast, showToast, hideToast } = useToast();
 
   const loadData = useCallback(async () => {
     try {
@@ -500,7 +502,7 @@ export default function LotesColaboradora() {
     loadData();
   }, [authLoading, user, profile, router, loadData]);
 
-  const flash = () => { setSaved(true); setTimeout(() => setSaved(false), 3000); };
+  const flash = (message: string) => showToast(message);
 
   const handleLoss = async (qty: number, reason: string, lossType: LossType) => {
     if (!selectedSlot || !user) return;
@@ -508,21 +510,25 @@ export default function LotesColaboradora() {
     const newQty = slot.quantity - qty;
     const today = new Date().toISOString().split('T')[0];
 
-    await Promise.all([
-      supabase.from('lot_losses').insert({
-        lot_id: lot.id, date: today, quantity: qty,
-        reason: reason || null, slot_code: slot.slot_code,
-        loss_type: lossType, user_id: user.id,
-      }),
-      supabase.from('lots').update({ current_quantity: lot.current_quantity - qty }).eq('id', lot.id),
-      newQty === 0
-        ? supabase.from('cage_slots').delete().eq('id', slot.id)
-        : supabase.from('cage_slots').update({ quantity: newQty }).eq('id', slot.id),
-    ]);
-
-    setSelectedSlot(null);
-    flash();
-    await loadData();
+    try {
+      const results = await Promise.all([
+        supabase.from('lot_losses').insert({
+          lot_id: lot.id, date: today, quantity: qty,
+          reason: reason || null, slot_code: slot.slot_code,
+          loss_type: lossType, user_id: user.id,
+        }),
+        supabase.from('lots').update({ current_quantity: lot.current_quantity - qty }).eq('id', lot.id),
+        newQty === 0
+          ? supabase.from('cage_slots').delete().eq('id', slot.id)
+          : supabase.from('cage_slots').update({ quantity: newQty }).eq('id', slot.id),
+      ]);
+      assertSupabaseAllOk(results, 'No se pudo registrar la baja.');
+      setSelectedSlot(null);
+      flash('Baja registrada');
+      await loadData();
+    } catch (error) {
+      showToast(getErrorMessage(error, 'No se pudo registrar la baja.'), 'error');
+    }
   };
 
   const handleReorder = async (qty: number) => {
@@ -530,18 +536,22 @@ export default function LotesColaboradora() {
     const { origin, destination, isNewSlot } = reorderPair;
     const newOriginQty = origin.quantity - qty;
 
-    await Promise.all([
-      newOriginQty === 0
-        ? supabase.from('cage_slots').delete().eq('id', origin.id)
-        : supabase.from('cage_slots').update({ quantity: newOriginQty }).eq('id', origin.id),
-      isNewSlot || destination.id === -1
-        ? supabase.from('cage_slots').insert({ lot_id: origin.lot_id, slot_code: destination.slot_code, quantity: qty })
-        : supabase.from('cage_slots').update({ quantity: destination.quantity + qty }).eq('id', destination.id),
-    ]);
-
-    setReorderPair(null);
-    flash();
-    await loadData();
+    try {
+      const results = await Promise.all([
+        newOriginQty === 0
+          ? supabase.from('cage_slots').delete().eq('id', origin.id)
+          : supabase.from('cage_slots').update({ quantity: newOriginQty }).eq('id', origin.id),
+        isNewSlot || destination.id === -1
+          ? supabase.from('cage_slots').insert({ lot_id: origin.lot_id, slot_code: destination.slot_code, quantity: qty })
+          : supabase.from('cage_slots').update({ quantity: destination.quantity + qty }).eq('id', destination.id),
+      ]);
+      assertSupabaseAllOk(results, 'No se pudo mover las aves.');
+      setReorderPair(null);
+      flash('Aves movidas');
+      await loadData();
+    } catch (error) {
+      showToast(getErrorMessage(error, 'No se pudo mover las aves.'), 'error');
+    }
   };
 
   const occupiedSlotCodes = new Set(slots.filter(s => s.quantity > 0).map(s => s.slot_code));
@@ -562,13 +572,13 @@ export default function LotesColaboradora() {
 
   return (
     <div className="min-h-screen bg-gray-50">
+      <ToastViewport toast={toast} onClose={hideToast} />
       <Header userName={profile.full_name} role={profile.role} backHref="/dashboard" backLabel="Inicio" />
 
       <div className="max-w-2xl mx-auto px-4 py-6 space-y-6">
 
         <div className="flex items-center justify-between">
           <h2 className="text-2xl font-black text-gray-900">Aves</h2>
-          {saved && <span className="text-green-600 text-sm font-bold animate-pulse">✓ Guardado</span>}
         </div>
 
         {/* Resumen */}

@@ -6,6 +6,8 @@ import Header from '@/components/Header';
 import { Plus, X, Trash2, Calendar, Clock, User, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useRouter } from 'next/navigation';
+import { ConfirmDialog, ToastViewport, useToast } from '@/components/Feedback';
+import { assertSupabaseOk, getErrorMessage } from '@/lib/supabase-ops';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -53,8 +55,9 @@ export default function Tareas() {
   const [newAssigned, setNewAssigned] = useState('');
 
   const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
+  const { toast, showToast, hideToast } = useToast();
 
   const today = new Date().toISOString().split('T')[0];
 
@@ -89,7 +92,7 @@ export default function Tareas() {
     if (!newDesc.trim() || !user) return;
     setSaving(true);
     try {
-      await supabase.from('tasks').insert({
+      assertSupabaseOk(await supabase.from('tasks').insert({
         description: newDesc.trim(),
         type: newType,
         is_active: true,
@@ -99,12 +102,13 @@ export default function Tareas() {
         assigned_to: newType === 'custom' && newAssigned ? newAssigned : null,
         created_by: user.id,
         is_urgent: false,
-      });
+      }));
       setNewDesc('');
       setShowForm(false);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 3000);
+      showToast('Tarea creada');
       await loadData();
+    } catch (error) {
+      showToast(getErrorMessage(error, 'No se pudo crear la tarea.'), 'error');
     } finally {
       setSaving(false);
     }
@@ -112,9 +116,22 @@ export default function Tareas() {
 
   // ── Eliminar tarea ──────────────────────────────────────────────────────────
   const handleDelete = async (id: number) => {
-    if (!confirm('¿Eliminar esta tarea?')) return;
-    await supabase.from('tasks').update({ is_active: false }).eq('id', id);
-    await loadData();
+    setPendingDeleteId(id);
+  };
+
+  const confirmDelete = async () => {
+    if (pendingDeleteId === null) return;
+    setSaving(true);
+    try {
+      assertSupabaseOk(await supabase.from('tasks').update({ is_active: false }).eq('id', pendingDeleteId));
+      setPendingDeleteId(null);
+      showToast('Tarea eliminada');
+      await loadData();
+    } catch (error) {
+      showToast(getErrorMessage(error, 'No se pudo eliminar la tarea.'), 'error');
+    } finally {
+      setSaving(false);
+    }
   };
 
   // ── Helpers de vista ────────────────────────────────────────────────────────
@@ -136,13 +153,23 @@ export default function Tareas() {
 
   return (
     <div className="min-h-screen bg-gray-50">
+      <ToastViewport toast={toast} onClose={hideToast} />
+      <ConfirmDialog
+        open={pendingDeleteId !== null}
+        title="Eliminar tarea"
+        description="La tarea dejará de aparecer para el equipo. Podés volver a crearla si la necesitás más adelante."
+        confirmLabel="Eliminar"
+        danger
+        busy={saving}
+        onConfirm={confirmDelete}
+        onCancel={() => setPendingDeleteId(null)}
+      />
       <Header userName={profile.full_name} role={profile.role} backHref="/dashboard/admin" backLabel="Dashboard" />
 
       <div className="max-w-2xl mx-auto px-4 py-6 space-y-6">
 
         <div className="flex items-center justify-between">
           <h2 className="text-2xl font-bold text-gray-900 tracking-tight">Gestión de Tareas</h2>
-          {saved && <span className="text-green-600 text-xs font-bold animate-bounce">✓ Guardado</span>}
         </div>
 
         {/* Formulario nueva tarea */}

@@ -6,6 +6,8 @@ import Header from '@/components/Header';
 import { ChevronDown, AlertCircle } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useRouter } from 'next/navigation';
+import { ToastViewport, useToast } from '@/components/Feedback';
+import { assertSupabaseOk, getErrorMessage } from '@/lib/supabase-ops';
 
 // ─── Counter ──────────────────────────────────────────────────────────────────
 
@@ -109,20 +111,6 @@ function DatePicker({ value, onChange }: { value: string; onChange: (v: string) 
   );
 }
 
-// ─── Toast ────────────────────────────────────────────────────────────────────
-
-// Posicionado debajo del header (top-16) para no quedar cortado por el sticky header
-function Toast({ message, visible }: { message: string; visible: boolean }) {
-  return (
-    <div className={`fixed top-16 left-1/2 -translate-x-1/2 z-50 transition-all duration-300 px-4 w-full max-w-sm
-      ${visible ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-2 pointer-events-none'}`}>
-      <div className="bg-green-500 text-white px-5 py-3 rounded-2xl shadow-lg font-medium text-sm flex items-center justify-center gap-2">
-        ✓ {message}
-      </div>
-    </div>
-  );
-}
-
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function RegistroHuevos() {
@@ -149,14 +137,7 @@ export default function RegistroHuevos() {
   const [existeConsumo, setExisteConsumo] = useState(false);
 
   const [loading, setLoading] = useState(false);
-  const [toast, setToast] = useState('');
-  const [toastVisible, setToastVisible] = useState(false);
-
-  const showToast = (msg: string) => {
-    setToast(msg);
-    setToastVisible(true);
-    setTimeout(() => setToastVisible(false), 3000);
-  };
+  const { toast, showToast, hideToast } = useToast();
 
   const checkExistingConsumo = useCallback(async (date: string) => {
     if (!user) return;
@@ -206,19 +187,19 @@ export default function RegistroHuevos() {
     e.preventDefault();
     if (!consumoValido || !user) return;
     setLoading(true);
-    const now = new Date();
-    const { error } = await supabase.from('daily_records').insert({
-      date: dateConsumo,
-      user_id: user.id,
-      bandejas_consumo: bandejas ?? 0,
-      bandejas_fertiles: bandFertiles ?? 0,
-      docenas_armadas: docenas ?? 0,
-      huevos_rotos: rotos ?? 0,
-      notas: notasConsumo.trim() || null,
-      registered_at: now.toTimeString().split(' ')[0],
-    });
+    try {
+      const now = new Date();
+      assertSupabaseOk(await supabase.from('daily_records').insert({
+        date: dateConsumo,
+        user_id: user.id,
+        bandejas_consumo: bandejas ?? 0,
+        bandejas_fertiles: bandFertiles ?? 0,
+        docenas_armadas: docenas ?? 0,
+        huevos_rotos: rotos ?? 0,
+        notas: notasConsumo.trim() || null,
+        registered_at: now.toTimeString().split(' ')[0],
+      }));
 
-    if (!error) {
       // Si hay bandejas fértiles, crearlas en fertile_batches (una por bandeja)
       const numBandejasFertiles = bandFertiles ?? 0;
       if (numBandejasFertiles > 0) {
@@ -227,7 +208,7 @@ export default function RegistroHuevos() {
           user_id: user.id,
           status: 'pendiente',
         }));
-        await supabase.from('fertile_batches').insert(batches);
+        assertSupabaseOk(await supabase.from('fertile_batches').insert(batches));
       }
       showToast('Registro guardado' + (numBandejasFertiles > 0 ? ` · ${numBandejasFertiles} bandeja${numBandejasFertiles > 1 ? 's' : ''} fértil${numBandejasFertiles > 1 ? 'es' : ''} pendiente${numBandejasFertiles > 1 ? 's' : ''}` : ''));
       setBandejas(null);
@@ -237,41 +218,49 @@ export default function RegistroHuevos() {
       setNotasConsumo('');
       setDateConsumo(new Date().toISOString().split('T')[0]);
       setExisteConsumo(true);
-    } else {
-      alert('Error al guardar: ' + error.message);
+    } catch (error) {
+      showToast(getErrorMessage(error, 'No se pudo guardar el registro de huevos.'), 'error');
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const handleProcessBatch = async (batch: FertileBatch) => {
     if (!batchDocenas || !user) return;
     setSavingBatch(true);
-    await supabase.from('fertile_batches').update({
-      status: 'procesada',
-      docenas_seleccionadas: Number(batchDocenas),
-      descarte: Number(batchDescarte) || 0,
-      processed_at: new Date().toISOString().split('T')[0],
-      processed_by: user.id,
-    }).eq('id', batch.id);
-    await supabase.from('fertile_records').insert({
-      date: batch.date,
-      user_id: user.id,
-      bandejas_procesadas: 1,
-      docenas_seleccionadas: Number(batchDocenas),
-      descarte: Number(batchDescarte) || 0,
-      registered_at: new Date().toTimeString().split(' ')[0],
-    });
-    setProcessingBatch(null);
-    setBatchDocenas('');
-    setBatchDescarte('');
-    setSavingBatch(false);
-    showToast('Bandeja procesada');
-    await loadPendingBatches();
+    try {
+      assertSupabaseOk(await supabase.from('fertile_batches').update({
+        status: 'procesada',
+        docenas_seleccionadas: Number(batchDocenas),
+        descarte: Number(batchDescarte) || 0,
+        processed_at: new Date().toISOString().split('T')[0],
+        processed_by: user.id,
+      }).eq('id', batch.id));
+
+      assertSupabaseOk(await supabase.from('fertile_records').insert({
+        date: batch.date,
+        user_id: user.id,
+        bandejas_procesadas: 1,
+        docenas_seleccionadas: Number(batchDocenas),
+        descarte: Number(batchDescarte) || 0,
+        registered_at: new Date().toTimeString().split(' ')[0],
+      }));
+
+      setProcessingBatch(null);
+      setBatchDocenas('');
+      setBatchDescarte('');
+      showToast('Bandeja procesada');
+      await loadPendingBatches();
+    } catch (error) {
+      showToast(getErrorMessage(error, 'No se pudo procesar la bandeja.'), 'error');
+    } finally {
+      setSavingBatch(false);
+    }
   };
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <Toast message={toast} visible={toastVisible} />
+      <ToastViewport toast={toast} onClose={hideToast} />
 
       <Header
         userName={profile.full_name}

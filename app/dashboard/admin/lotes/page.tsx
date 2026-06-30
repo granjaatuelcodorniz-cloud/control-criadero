@@ -9,6 +9,8 @@ import {
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useRouter } from 'next/navigation';
+import { ToastViewport, useToast } from '@/components/Feedback';
+import { assertSupabaseAllOk, assertSupabaseOk, getErrorMessage } from '@/lib/supabase-ops';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -792,7 +794,7 @@ export default function Lotes() {
   const [retireLot, setRetireLot] = useState<Lot | null>(null);
 
   const [loading, setLoading] = useState(false);
-  const [saved, setSaved] = useState(false);
+  const { toast, showToast, hideToast } = useToast();
 
   const loadData = useCallback(async () => {
     try {
@@ -818,19 +820,23 @@ export default function Lotes() {
     loadData();
   }, [authLoading, user, profile, router, loadData]);
 
-  const flash = () => { setSaved(true); setTimeout(() => setSaved(false), 3000); };
+  const flash = (message: string) => showToast(message);
 
   const handleNewLot = async (data: { code: string; start_date: string; notes: string; slots: { slot_code: string; quantity: number }[] }) => {
     if (!user) return;
     const totalQty = data.slots.reduce((s, sl) => s + sl.quantity, 0);
-    const { data: lotData, error } = await supabase.from('lots')
-      .insert({ code: data.code, start_date: data.start_date, initial_quantity: totalQty, current_quantity: totalQty, notes: data.notes || null, created_by: user.id })
-      .select().single();
-    if (error || !lotData) { console.error(error); return; }
-    await supabase.from('cage_slots').insert(data.slots.map(s => ({ lot_id: lotData.id, slot_code: s.slot_code, quantity: s.quantity })));
-    setShowNewLot(false);
-    flash();
-    await loadData();
+    try {
+      const { data: lotData } = assertSupabaseOk(await supabase.from('lots')
+        .insert({ code: data.code, start_date: data.start_date, initial_quantity: totalQty, current_quantity: totalQty, notes: data.notes || null, created_by: user.id })
+        .select().single());
+      if (!lotData) throw new Error('No se pudo crear el lote.');
+      assertSupabaseOk(await supabase.from('cage_slots').insert(data.slots.map(s => ({ lot_id: lotData.id, slot_code: s.slot_code, quantity: s.quantity }))));
+      setShowNewLot(false);
+      flash('Lote creado');
+      await loadData();
+    } catch (error) {
+      showToast(getErrorMessage(error, 'No se pudo crear el lote.'), 'error');
+    }
   };
 
   const handleLoss = async (qty: number, reason: string, lossType: LossType) => {
@@ -839,17 +845,21 @@ export default function Lotes() {
     const newQty = slot.quantity - qty;
     const today = new Date().toISOString().split('T')[0];
 
-    await Promise.all([
-      supabase.from('lot_losses').insert({ lot_id: lot.id, date: today, quantity: qty, reason: reason || null, slot_code: slot.slot_code, loss_type: lossType, user_id: user.id }),
-      supabase.from('lots').update({ current_quantity: lot.current_quantity - qty }).eq('id', lot.id),
-      newQty === 0
-        ? supabase.from('cage_slots').delete().eq('id', slot.id)
-        : supabase.from('cage_slots').update({ quantity: newQty }).eq('id', slot.id),
-    ]);
-
-    setSelectedSlot(null);
-    flash();
-    await loadData();
+    try {
+      const results = await Promise.all([
+        supabase.from('lot_losses').insert({ lot_id: lot.id, date: today, quantity: qty, reason: reason || null, slot_code: slot.slot_code, loss_type: lossType, user_id: user.id }),
+        supabase.from('lots').update({ current_quantity: lot.current_quantity - qty }).eq('id', lot.id),
+        newQty === 0
+          ? supabase.from('cage_slots').delete().eq('id', slot.id)
+          : supabase.from('cage_slots').update({ quantity: newQty }).eq('id', slot.id),
+      ]);
+      assertSupabaseAllOk(results, 'No se pudo registrar la baja.');
+      setSelectedSlot(null);
+      flash('Baja registrada');
+      await loadData();
+    } catch (error) {
+      showToast(getErrorMessage(error, 'No se pudo registrar la baja.'), 'error');
+    }
   };
 
   const handleReorder = async (qty: number) => {
@@ -857,18 +867,22 @@ export default function Lotes() {
     const { origin, destination, isNewSlot } = reorderPair;
     const newOriginQty = origin.quantity - qty;
 
-    await Promise.all([
-      newOriginQty === 0
-        ? supabase.from('cage_slots').delete().eq('id', origin.id)
-        : supabase.from('cage_slots').update({ quantity: newOriginQty }).eq('id', origin.id),
-      isNewSlot || destination.id === -1
-        ? supabase.from('cage_slots').insert({ lot_id: origin.lot_id, slot_code: destination.slot_code, quantity: qty })
-        : supabase.from('cage_slots').update({ quantity: destination.quantity + qty }).eq('id', destination.id),
-    ]);
-
-    setReorderPair(null);
-    flash();
-    await loadData();
+    try {
+      const results = await Promise.all([
+        newOriginQty === 0
+          ? supabase.from('cage_slots').delete().eq('id', origin.id)
+          : supabase.from('cage_slots').update({ quantity: newOriginQty }).eq('id', origin.id),
+        isNewSlot || destination.id === -1
+          ? supabase.from('cage_slots').insert({ lot_id: origin.lot_id, slot_code: destination.slot_code, quantity: qty })
+          : supabase.from('cage_slots').update({ quantity: destination.quantity + qty }).eq('id', destination.id),
+      ]);
+      assertSupabaseAllOk(results, 'No se pudo mover las aves.');
+      setReorderPair(null);
+      flash('Aves movidas');
+      await loadData();
+    } catch (error) {
+      showToast(getErrorMessage(error, 'No se pudo mover las aves.'), 'error');
+    }
   };
 
   const handleRetire = async (reason: string) => {
@@ -877,15 +891,19 @@ export default function Lotes() {
     const totalAves = lotSlots.reduce((s, sl) => s + sl.quantity, 0);
     const today = new Date().toISOString().split('T')[0];
 
-    await Promise.all([
-      supabase.from('lot_losses').insert({ lot_id: retireLot.id, date: today, quantity: totalAves, reason: reason || 'Retiro de lote', loss_type: 'descarte', user_id: user.id, slot_code: null }),
-      supabase.from('cage_slots').delete().eq('lot_id', retireLot.id),
-      supabase.from('lots').update({ status: 'cerrado', current_quantity: 0 }).eq('id', retireLot.id),
-    ]);
-
-    setRetireLot(null);
-    flash();
-    await loadData();
+    try {
+      const results = await Promise.all([
+        supabase.from('lot_losses').insert({ lot_id: retireLot.id, date: today, quantity: totalAves, reason: reason || 'Retiro de lote', loss_type: 'descarte', user_id: user.id, slot_code: null }),
+        supabase.from('cage_slots').delete().eq('lot_id', retireLot.id),
+        supabase.from('lots').update({ status: 'cerrado', current_quantity: 0 }).eq('id', retireLot.id),
+      ]);
+      assertSupabaseAllOk(results, 'No se pudo retirar el lote.');
+      setRetireLot(null);
+      flash('Lote retirado');
+      await loadData();
+    } catch (error) {
+      showToast(getErrorMessage(error, 'No se pudo retirar el lote.'), 'error');
+    }
   };
 
   const occupiedSlotCodes = new Set(slots.filter(s => s.quantity > 0).map(s => s.slot_code));
@@ -908,13 +926,13 @@ export default function Lotes() {
 
   return (
     <div className="min-h-screen bg-gray-50">
+      <ToastViewport toast={toast} onClose={hideToast} />
       <Header userName={profile.full_name} role={profile.role} backHref="/dashboard/admin" backLabel="Dashboard" />
 
       <div className="max-w-2xl mx-auto px-4 py-6 space-y-6">
 
         <div className="flex items-center justify-between">
           <h2 className="text-2xl font-black text-gray-900">Gestión de Lotes</h2>
-          {saved && <span className="text-green-600 text-sm font-bold animate-pulse">✓ Guardado</span>}
         </div>
 
         {activeLots.length > 0 && (

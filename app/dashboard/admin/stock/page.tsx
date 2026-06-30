@@ -9,6 +9,8 @@ import {
   Plus, X, Pencil, History, ArrowDownCircle, ArrowUpCircle,
   ClipboardList, Package, AlertTriangle, Check,
 } from 'lucide-react';
+import { ToastViewport, useToast } from '@/components/Feedback';
+import { assertSupabaseAllOk, assertSupabaseOk, getErrorMessage } from '@/lib/supabase-ops';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -56,19 +58,25 @@ function InsumoCard({
   const handleSave = async () => {
     if (!editName.trim()) return;
     setSaving(true);
-    await onSave(item.id, editName.trim(), editThreshold);
-    setSaving(false);
-    setEditing(false);
+    try {
+      await onSave(item.id, editName.trim(), editThreshold);
+      setEditing(false);
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleAdjust = async () => {
     if (adjustQty <= 0) return;
     setSaving(true);
-    await onAdjust(item, adjustQty, adjusting!, adjustNotes);
-    setSaving(false);
-    setAdjusting(null);
-    setAdjustQty(1);
-    setAdjustNotes('');
+    try {
+      await onAdjust(item, adjustQty, adjusting!, adjustNotes);
+      setAdjusting(null);
+      setAdjustQty(1);
+      setAdjustNotes('');
+    } finally {
+      setSaving(false);
+    }
   };
 
   if (editing) {
@@ -182,10 +190,10 @@ export default function Stock() {
   const [filterItemId, setFilterItemId] = useState<number | 'all'>('all');
 
   const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(false);
+  const { toast, showToast, hideToast } = useToast();
 
-  const flash = () => { setSaved(true); setTimeout(() => setSaved(false), 2500); };
+  const flash = (message = 'Stock actualizado') => showToast(message);
 
   const loadData = useCallback(async () => {
     try {
@@ -214,7 +222,7 @@ export default function Stock() {
     if (!feedItem.kg_por_bolsa || !feedItem.bolsas_restantes || !user) return;
     setSaving(true);
     try {
-      await Promise.all([
+      const results = await Promise.all([
         supabase.from('stock_items').update({
           current_quantity: Math.max(0, feedItem.current_quantity - feedItem.kg_por_bolsa),
           bolsas_restantes: Math.max(0, feedItem.bolsas_restantes - 1),
@@ -228,8 +236,11 @@ export default function Stock() {
           date: new Date().toISOString().split('T')[0],
         }),
       ]);
-      flash();
+      assertSupabaseAllOk(results, 'No se pudo abrir la bolsa.');
+      flash('Bolsa abierta y stock actualizado');
       await loadData();
+    } catch (error) {
+      showToast(getErrorMessage(error, 'No se pudo abrir la bolsa.'), 'error');
     } finally {
       setSaving(false);
     }
@@ -245,7 +256,7 @@ export default function Stock() {
       const totalKg = Number(feedKg);
       const numBolsas = Number(feedBolsas);
       const kgPorBolsa = Math.round((totalKg / numBolsas) * 100) / 100;
-      await Promise.all([
+      const results = await Promise.all([
         supabase.from('stock_items').update({
           current_quantity: feedItem.current_quantity + totalKg,
           kg_por_bolsa: kgPorBolsa,
@@ -260,11 +271,14 @@ export default function Stock() {
           date: feedDate,
         }),
       ]);
+      assertSupabaseAllOk(results, 'No se pudo registrar la entrega.');
       setFeedKg('');
       setFeedBolsas('');
       setShowFeedForm(null);
-      flash();
+      flash('Entrega registrada');
       await loadData();
+    } catch (error) {
+      showToast(getErrorMessage(error, 'No se pudo registrar la entrega.'), 'error');
     } finally {
       setSaving(false);
     }
@@ -275,20 +289,22 @@ export default function Stock() {
     if (!newName.trim() || !newUnit.trim()) return;
     setSaving(true);
     try {
-      await supabase.from('stock_items').insert({
+      assertSupabaseOk(await supabase.from('stock_items').insert({
         name: newName.trim(),
         unit: newUnit.trim(),
         current_quantity: newQty,
         alert_threshold: newThreshold,
         is_feed: false,
-      });
+      }));
       setNewName('');
       setNewUnit('');
       setNewQty(0);
       setNewThreshold(0);
       setShowNewItem(false);
-      flash();
+      flash('Insumo creado');
       await loadData();
+    } catch (error) {
+      showToast(getErrorMessage(error, 'No se pudo crear el insumo.'), 'error');
     } finally {
       setSaving(false);
     }
@@ -296,9 +312,14 @@ export default function Stock() {
 
   // ── Insumo general: editar ──────────────────────────────────────────────────
   const handleEditItem = async (id: number, name: string, threshold: number) => {
-    await supabase.from('stock_items').update({ name, alert_threshold: threshold }).eq('id', id);
-    flash();
-    await loadData();
+    try {
+      assertSupabaseOk(await supabase.from('stock_items').update({ name, alert_threshold: threshold }).eq('id', id));
+      flash('Insumo actualizado');
+      await loadData();
+    } catch (error) {
+      showToast(getErrorMessage(error, 'No se pudo actualizar el insumo.'), 'error');
+      throw error;
+    }
   };
 
   // ── Insumo general: ajuste entrada/salida ───────────────────────────────────
@@ -312,19 +333,25 @@ export default function Stock() {
     const newQtyVal = type === 'entrada'
       ? item.current_quantity + qty
       : Math.max(0, item.current_quantity - qty);
-    await Promise.all([
-      supabase.from('stock_items').update({ current_quantity: newQtyVal }).eq('id', item.id),
-      supabase.from('stock_movements').insert({
-        stock_item_id: item.id,
-        quantity: qty,
-        movement_type: type,
-        notes: notes || null,
-        user_id: user.id,
-        date: new Date().toISOString().split('T')[0],
-      }),
-    ]);
-    flash();
-    await loadData();
+    try {
+      const results = await Promise.all([
+        supabase.from('stock_items').update({ current_quantity: newQtyVal }).eq('id', item.id),
+        supabase.from('stock_movements').insert({
+          stock_item_id: item.id,
+          quantity: qty,
+          movement_type: type,
+          notes: notes || null,
+          user_id: user.id,
+          date: new Date().toISOString().split('T')[0],
+        }),
+      ]);
+      assertSupabaseAllOk(results, 'No se pudo ajustar el stock.');
+      flash(type === 'entrada' ? 'Entrada registrada' : 'Salida registrada');
+      await loadData();
+    } catch (error) {
+      showToast(getErrorMessage(error, 'No se pudo ajustar el stock.'), 'error');
+      throw error;
+    }
   };
 
   // ── Render ──────────────────────────────────────────────────────────────────
@@ -348,12 +375,12 @@ export default function Stock() {
 
   return (
     <div className="min-h-screen bg-gray-50">
+      <ToastViewport toast={toast} onClose={hideToast} />
       <Header userName={profile.full_name} role={profile.role} backHref="/dashboard/admin" backLabel="Dashboard" />
 
       <div className="max-w-2xl mx-auto px-4 py-6 space-y-8">
         <div className="flex items-center justify-between">
           <h2 className="text-2xl font-bold text-gray-900">Stock</h2>
-          {saved && <span className="text-green-600 text-sm font-bold animate-pulse">✓ Actualizado</span>}
         </div>
 
         {/* ── ALIMENTOS ── */}

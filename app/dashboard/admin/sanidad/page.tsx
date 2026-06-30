@@ -10,6 +10,8 @@ import {
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useRouter } from 'next/navigation';
+import { ConfirmDialog, ToastViewport, useToast } from '@/components/Feedback';
+import { assertSupabaseOk, getErrorMessage } from '@/lib/supabase-ops';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -101,9 +103,12 @@ function ProductCard({
   const handleSave = async () => {
     if (!name.trim()) return;
     setSaving(true);
-    await onSave(product.id, { name: name.trim(), type, dose_per_bird: dosePerBird, unit, notes: notes.trim() || null });
-    setSaving(false);
-    setEditing(false);
+    try {
+      await onSave(product.id, { name: name.trim(), type, dose_per_bird: dosePerBird, unit, notes: notes.trim() || null });
+      setEditing(false);
+    } finally {
+      setSaving(false);
+    }
   };
 
   if (editing) {
@@ -207,11 +212,12 @@ export default function Sanidad() {
   const [filterTipo, setFilterTipo] = useState('all');
 
   const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<{ type: 'record' | 'product'; id: number } | null>(null);
+  const { toast, showToast, hideToast } = useToast();
 
   const today = new Date().toISOString().split('T')[0];
-  const flash = () => { setSaved(true); setTimeout(() => setSaved(false), 3000); };
+  const flash = (message: string) => showToast(message);
 
   const loadData = useCallback(async () => {
     try {
@@ -274,7 +280,7 @@ export default function Sanidad() {
     if (!tipo || !date || !user) return;
     setSaving(true);
     try {
-      await supabase.from('health_records').insert({
+      assertSupabaseOk(await supabase.from('health_records').insert({
         date,
         type: tipo,
         lot_id: lotId ? Number(lotId) : null,
@@ -287,14 +293,16 @@ export default function Sanidad() {
         dose_applied: doseApplied ? Number(doseApplied) : null,
         water_liters: waterLiters ? Number(waterLiters) : null,
         duration_days: durationDays ? Number(durationDays) : null,
-      });
+      }));
       setTipo(TIPOS[0]); setLotId(''); setProductId(''); setDosis('');
       setDoseCalculated(null); setDoseApplied(''); setWaterLiters('');
       setNotes(''); setNextApp(''); setNextAppDays(''); setDurationDays('');
       setDate(new Date().toISOString().split('T')[0]);
       setShowForm(false);
-      flash();
+      flash('Registro sanitario guardado');
       await loadData();
+    } catch (error) {
+      showToast(getErrorMessage(error, 'No se pudo guardar el registro sanitario.'), 'error');
     } finally {
       setSaving(false);
     }
@@ -302,51 +310,80 @@ export default function Sanidad() {
 
   // ── Eliminar registro ───────────────────────────────────────────────────────
   const handleDelete = async (id: number) => {
-    if (!confirm('¿Eliminar este registro?')) return;
-    await supabase.from('health_records').delete().eq('id', id);
-    await loadData();
+    setPendingDelete({ type: 'record', id });
+  };
+
+  const confirmDelete = async () => {
+    if (!pendingDelete) return;
+    setSaving(true);
+    try {
+      if (pendingDelete.type === 'record') {
+        assertSupabaseOk(await supabase.from('health_records').delete().eq('id', pendingDelete.id));
+        showToast('Registro eliminado');
+      } else {
+        assertSupabaseOk(await supabase.from('health_products').delete().eq('id', pendingDelete.id));
+        showToast('Producto eliminado');
+      }
+      setPendingDelete(null);
+      await loadData();
+    } catch (error) {
+      showToast(getErrorMessage(error, 'No se pudo eliminar.'), 'error');
+    } finally {
+      setSaving(false);
+    }
   };
 
   // ── Posponer next_application ───────────────────────────────────────────────
   const handlePostpone = async (record: HealthRecord) => {
     if (!record.next_application || !postponeDays) return;
     setSaving(true);
-    const d = new Date(record.next_application);
-    d.setDate(d.getDate() + Number(postponeDays));
-    await supabase.from('health_records')
-      .update({ next_application: d.toISOString().split('T')[0] })
-      .eq('id', record.id);
-    setPostponeId(null);
-    flash();
-    await loadData();
-    setSaving(false);
+    try {
+      const d = new Date(record.next_application);
+      d.setDate(d.getDate() + Number(postponeDays));
+      assertSupabaseOk(await supabase.from('health_records')
+        .update({ next_application: d.toISOString().split('T')[0] })
+        .eq('id', record.id));
+      setPostponeId(null);
+      flash('Aplicación pospuesta');
+      await loadData();
+    } catch (error) {
+      showToast(getErrorMessage(error, 'No se pudo posponer la aplicación.'), 'error');
+    } finally {
+      setSaving(false);
+    }
   };
 
   // ── Productos ───────────────────────────────────────────────────────────────
   const handleSaveProduct = async (id: number, data: Partial<HealthProduct>) => {
-    await supabase.from('health_products').update(data).eq('id', id);
-    flash();
-    await loadData();
+    try {
+      assertSupabaseOk(await supabase.from('health_products').update(data).eq('id', id));
+      flash('Producto actualizado');
+      await loadData();
+    } catch (error) {
+      showToast(getErrorMessage(error, 'No se pudo actualizar el producto.'), 'error');
+      throw error;
+    }
   };
 
   const handleDeleteProduct = async (id: number) => {
-    if (!confirm('¿Eliminar este producto?')) return;
-    await supabase.from('health_products').delete().eq('id', id);
-    await loadData();
+    setPendingDelete({ type: 'product', id });
   };
 
   const handleNewProduct = async () => {
     if (!newProdName.trim() || !newProdDose) return;
     setSaving(true);
     try {
-      await supabase.from('health_products').insert({
+      assertSupabaseOk(await supabase.from('health_products').insert({
         name: newProdName.trim(), type: newProdType,
         dose_per_bird: Number(newProdDose), unit: newProdUnit,
         notes: newProdNotes.trim() || null,
-      });
+      }));
       setNewProdName(''); setNewProdDose(''); setNewProdUnit('ml'); setNewProdNotes('');
       setShowNewProduct(false);
+      flash('Producto creado');
       await loadData();
+    } catch (error) {
+      showToast(getErrorMessage(error, 'No se pudo crear el producto.'), 'error');
     } finally {
       setSaving(false);
     }
@@ -376,13 +413,25 @@ export default function Sanidad() {
 
   return (
     <div className="min-h-screen bg-gray-50">
+      <ToastViewport toast={toast} onClose={hideToast} />
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title={pendingDelete?.type === 'product' ? 'Eliminar producto' : 'Eliminar registro'}
+        description={pendingDelete?.type === 'product'
+          ? 'El producto dejará de estar disponible para nuevos registros sanitarios.'
+          : 'El registro sanitario se eliminará del historial. Esta acción no se puede deshacer.'}
+        confirmLabel="Eliminar"
+        danger
+        busy={saving}
+        onConfirm={confirmDelete}
+        onCancel={() => setPendingDelete(null)}
+      />
       <Header userName={profile.full_name} role={profile.role} backHref="/dashboard/admin" backLabel="Dashboard" />
 
       <div className="max-w-2xl mx-auto px-4 py-6 space-y-6">
 
         <div className="flex items-center justify-between">
           <h2 className="text-2xl font-bold text-gray-900">Sanidad</h2>
-          {saved && <span className="text-green-600 text-sm font-bold animate-pulse">✓ Guardado</span>}
         </div>
 
         {/* ── Tratamientos activos ── */}
