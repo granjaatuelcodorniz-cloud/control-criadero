@@ -370,11 +370,6 @@ export default function Dashboard() {
           </Link>
         </div>
 
-        {/* ── Baja rápida ── */}
-        {user && (
-          <BajaRapida slots={slots} lots={lots} userId={user.id} today={today} onSaved={loadData} />
-        )}
-
         {/* ── Tratamientos activos ── */}
         {activeTreatments.length > 0 && (
           <div>
@@ -510,6 +505,11 @@ export default function Dashboard() {
             </div>
           )}
         </div>
+
+        {/* ── Baja rápida (plegada) ── */}
+        {user && (
+          <BajaRapida slots={slots} lots={lots} userId={user.id} today={today} onSaved={loadData} collapsible />
+        )}
 
         {/* Insumos */}
         <div>

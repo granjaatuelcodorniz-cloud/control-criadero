@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { ChevronDown } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import {
   ROWS,
@@ -17,9 +18,12 @@ type Props = {
   today: string;
   /** Se llama tras guardar una baja, para que la página recargue sus datos. */
   onSaved: () => void | Promise<void>;
+  /** Si es true, arranca plegada y la cabecera funciona como botón para abrir/cerrar. */
+  collapsible?: boolean;
 };
 
-export default function BajaRapida({ slots, lots, userId, today, onSaved }: Props) {
+export default function BajaRapida({ slots, lots, userId, today, onSaved, collapsible = false }: Props) {
+  const [open, setOpen] = useState(!collapsible);
   const [quickRow, setQuickRow] = useState('');
   const [quickNum, setQuickNum] = useState('');
   const [quickSlot, setQuickSlot] = useState<QuickSlot | null>(null);
@@ -82,19 +86,39 @@ export default function BajaRapida({ slots, lots, userId, today, onSaved }: Prop
     setQuickQty(1);
   };
 
+  const Title = (
+    <div className="flex items-center gap-2">
+      <span className="text-sm font-bold text-gray-700">Registrar baja rápida</span>
+      {quickSaved && <span className="text-[10px] font-black text-green-600 bg-green-100 px-2 py-0.5 rounded-full">✓ Guardado</span>}
+    </div>
+  );
+
   return (
     <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden">
-      <div className="px-5 pt-4 pb-3 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-bold text-gray-700">Registrar baja rápida</span>
-          {quickSaved && <span className="text-[10px] font-black text-green-600 bg-green-100 px-2 py-0.5 rounded-full">✓ Guardado</span>}
+      {collapsible ? (
+        <button
+          onClick={() => setOpen(o => !o)}
+          className="w-full px-5 pt-4 pb-3 flex items-center justify-between text-left"
+        >
+          {Title}
+          <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform ${open ? 'rotate-180' : ''}`} />
+        </button>
+      ) : (
+        <div className="px-5 pt-4 pb-3 flex items-center justify-between">
+          {Title}
+          {quickSlot && (
+            <button onClick={resetQuick} className="text-xs text-gray-400 underline">limpiar</button>
+          )}
         </div>
-        {quickSlot && (
-          <button onClick={resetQuick} className="text-xs text-gray-400 underline">limpiar</button>
-        )}
-      </div>
+      )}
 
+      {open && (
       <div className="px-5 pb-5 space-y-3">
+        {collapsible && quickSlot && (
+          <div className="flex justify-end -mt-1">
+            <button onClick={resetQuick} className="text-xs text-gray-400 underline">limpiar</button>
+          </div>
+        )}
         {!quickSlot ? (
           <>
             <div>
@@ -183,6 +207,7 @@ export default function BajaRapida({ slots, lots, userId, today, onSaved }: Prop
           </>
         )}
       </div>
+      )}
     </div>
   );
 }
