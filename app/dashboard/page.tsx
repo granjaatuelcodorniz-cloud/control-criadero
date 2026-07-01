@@ -333,10 +333,15 @@ export default function Dashboard() {
 
   if (!profile) return null;
 
-  // "Cosas de hoy" = tareas diarias + cargar huevos (alimenta el anillo de progreso).
+  // Sección "Tareas de hoy" = diarias + cargar huevos.
   const dailyDone = dailyTasks.filter(t => completedIds.includes(t.id)).length;
-  const cosasHechas = dailyDone + (recoleccionHoy ? 1 : 0);
-  const cosasTotal = dailyTasks.length + 1;
+  const hoyHechas = dailyDone + (recoleccionHoy ? 1 : 0);
+  const hoyTotal = dailyTasks.length + 1;
+  // Progreso del día (anillo): todo lo pendiente, también periódicas y asignadas.
+  const todasLasTareas = [...dailyTasks, ...periodicTasks, ...customTasks];
+  const todasHechas = todasLasTareas.filter(t => completedIds.includes(t.id)).length;
+  const cosasHechas = todasHechas + (recoleccionHoy ? 1 : 0);
+  const cosasTotal = todasLasTareas.length + 1;
   const restan = cosasTotal - cosasHechas;
   const feedItems = stockItems.filter(i => i.is_feed);
   const otherItems = stockItems.filter(i => !i.is_feed);
@@ -396,7 +401,7 @@ export default function Dashboard() {
         <div>
           <div className="flex items-center justify-between mb-3">
             <h3 className="font-semibold text-gray-700 text-sm uppercase tracking-wide">Tareas de hoy</h3>
-            <span className="text-xs text-gray-400">{cosasHechas} de {cosasTotal} hechas</span>
+            <span className="text-xs text-gray-400">{hoyHechas} de {hoyTotal} hechas</span>
           </div>
           <div className="space-y-2">
             {!recoleccionHoy ? (
