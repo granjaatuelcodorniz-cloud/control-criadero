@@ -614,6 +614,13 @@ function LotCard({
             <div className={`h-2 rounded-full transition-all duration-700 ${survivalColor}`} style={{ width: `${pctSupervivencia}%` }} />
           </div>
         </div>
+
+        {onAddTanda && (
+          <button onClick={onAddTanda}
+            className="mt-4 w-full py-2.5 rounded-xl border-2 border-dashed border-yellow-200 text-yellow-600 hover:bg-yellow-50 text-sm font-bold flex items-center justify-center gap-2 transition-all">
+            <Plus className="w-4 h-4" /> Agregar tanda
+          </button>
+        )}
       </div>
 
       {recentLosses.length > 0 && (
@@ -665,22 +672,14 @@ function LotCard({
             ) : (
               <p className="text-[10px] text-gray-400 font-medium">Tocá una boca para registrar una baja</p>
             )}
-            <div className="flex items-center gap-2">
-              {onAddTanda && !reorderMode && (
-                <button onClick={onAddTanda}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-yellow-100 text-yellow-700 hover:bg-yellow-200 transition-all">
-                  <Plus className="w-3 h-3" /> Tanda
-                </button>
-              )}
-              {isOwner && (
-                <button onClick={() => reorderMode ? exitReorder() : setReorderMode(true)}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all
-                    ${reorderMode ? 'bg-blue-100 text-blue-700 hover:bg-blue-200' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}>
-                  <ArrowLeftRight className="w-3 h-3" />
-                  {reorderMode ? 'Salir' : 'Reacomodar'}
-                </button>
-              )}
-            </div>
+            {isOwner && (
+              <button onClick={() => reorderMode ? exitReorder() : setReorderMode(true)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all
+                  ${reorderMode ? 'bg-blue-100 text-blue-700 hover:bg-blue-200' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}>
+                <ArrowLeftRight className="w-3 h-3" />
+                {reorderMode ? 'Salir' : 'Reacomodar'}
+              </button>
+            )}
           </div>
 
           <SlotGrid
