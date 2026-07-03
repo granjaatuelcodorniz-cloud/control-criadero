@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
+import { assertSupabaseAllOk, getErrorMessage } from '@/lib/supabase-ops';
 import {
   ROWS,
   LOSS_TYPE_LABELS,
@@ -55,25 +56,34 @@ export default function BajaRapida({ slots, lots, userId, today, onSaved, collap
   const handleQuickLoss = async () => {
     if (!quickSlot || !quickLot) return;
     setSavingQuick(true);
+    setQuickError('');
     const newQty = quickSlot.quantity - quickQty;
-    await Promise.all([
-      supabase.from('lot_losses').insert({
-        lot_id: quickLot.id, date: today, quantity: quickQty,
-        reason: quickReason || null, slot_code: quickSlot.slot_code,
-        loss_type: quickLossType, user_id: userId,
-      }),
-      supabase.from('lots').update({ current_quantity: quickLot.current_quantity - quickQty }).eq('id', quickLot.id),
-      newQty === 0
-        ? supabase.from('cage_slots').delete().eq('id', quickSlot.id)
-        : supabase.from('cage_slots').update({ quantity: newQty }).eq('id', quickSlot.id),
-    ]);
+    let ok = false;
+    try {
+      assertSupabaseAllOk(await Promise.all([
+        supabase.from('lot_losses').insert({
+          lot_id: quickLot.id, date: today, quantity: quickQty,
+          reason: quickReason || null, slot_code: quickSlot.slot_code,
+          loss_type: quickLossType, user_id: userId,
+        }),
+        supabase.from('lots').update({ current_quantity: quickLot.current_quantity - quickQty }).eq('id', quickLot.id),
+        newQty === 0
+          ? supabase.from('cage_slots').delete().eq('id', quickSlot.id)
+          : supabase.from('cage_slots').update({ quantity: newQty }).eq('id', quickSlot.id),
+      ]));
+      ok = true;
+    } catch (error) {
+      setQuickError(getErrorMessage(error, 'No se pudo guardar la baja. Probá de nuevo.'));
+    } finally {
+      setSavingQuick(false);
+    }
+    if (!ok) return;
     setQuickSlot(null);
     setQuickLot(null);
     setQuickRow('');
     setQuickNum('');
     setQuickReason('');
     setQuickQty(1);
-    setSavingQuick(false);
     setQuickSaved(true);
     setTimeout(() => setQuickSaved(false), 3000);
     await onSaved();
@@ -198,6 +208,10 @@ export default function BajaRapida({ slots, lots, userId, today, onSaved, collap
 
             {quickQty === quickSlot.quantity && (
               <p className="text-xs text-red-500">⚠ Esta boca quedará vacía y se liberará</p>
+            )}
+
+            {quickError && (
+              <p className="text-xs text-red-500 font-medium">{quickError}</p>
             )}
 
             <button onClick={handleQuickLoss} disabled={savingQuick}

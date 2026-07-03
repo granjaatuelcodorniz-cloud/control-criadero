@@ -194,6 +194,7 @@ function EmpaqueCard({
   const handleSave = async () => {
     if (!valido || !user) return;
     setSaving(true);
+    let ok = false;
     try {
       const now = new Date();
       assertSupabaseOk(await supabase.from('consumo_empaque').insert({
@@ -204,14 +205,16 @@ function EmpaqueCard({
         rotos: rotos ?? 0,
         registered_at: now.toTimeString().split(' ')[0],
       }));
-      const quedan = restantes - (bandejas ?? 0);
-      showToast(quedan <= 0 ? 'Empaque del día completo' : `Empaque guardado · faltan ${quedan} bandejas`);
-      await onSaved();
+      ok = true;
     } catch (error) {
       showToast(getErrorMessage(error, 'No se pudo guardar el empaque.'), 'error');
     } finally {
       setSaving(false);
     }
+    if (!ok) return;
+    const quedan = restantes - (bandejas ?? 0);
+    showToast(quedan <= 0 ? 'Empaque del día completo' : `Empaque guardado · faltan ${quedan} bandejas`);
+    await onSaved();
   };
 
   return (
@@ -441,12 +444,13 @@ export default function RegistroHuevos() {
       setNotasRec('');
       setDateRec(getToday());
       setYaHayRec(true);
-      await loadPendientes();
     } catch (error) {
       showToast(getErrorMessage(error, 'No se pudo guardar la recolección.'), 'error');
     } finally {
       setLoading(false);
     }
+    // La recarga va aparte para no dejar el botón colgado si tarda.
+    void loadPendientes();
   };
 
   // ── Repartir producción mezclada entre el día pendiente y hoy (mitad y mitad) ──
@@ -457,6 +461,7 @@ export default function RegistroHuevos() {
     const totalR = repRotos ?? 0;
     if (totalB <= 0 && totalD <= 0) return;
     setSavingReparto(true);
+    let ok = false;
     try {
       const dias = [repartoDay, getToday()];
       const band = repartirParejo(totalB, dias.length);
@@ -484,18 +489,19 @@ export default function RegistroHuevos() {
           }))
         ));
       }
-
-      showToast('Repartido entre los dos días');
-      setRepartoDay(null);
-      setRepBandejas(null);
-      setRepDocenas(null);
-      setRepRotos(null);
-      await loadPendientes();
+      ok = true;
     } catch (error) {
       showToast(getErrorMessage(error, 'No se pudo repartir.'), 'error');
     } finally {
       setSavingReparto(false);
     }
+    if (!ok) return;
+    showToast('Repartido entre los dos días');
+    setRepartoDay(null);
+    setRepBandejas(null);
+    setRepDocenas(null);
+    setRepRotos(null);
+    void loadPendientes();
   };
 
   // ── Procesar bandeja fértil ──
