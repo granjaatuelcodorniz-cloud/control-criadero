@@ -8,7 +8,6 @@ import Header from '@/components/Header';
 import BajaRapida from '@/components/BajaRapida';
 import Link from 'next/link';
 import { getToday, toDateStr } from '@/lib/date';
-import { getFlag, setFlag, FLAG_COLAB_LOTES } from '@/lib/settings';
 import {
   TrendingUp, Package, Heart, ClipboardList, BarChart2,
   AlertTriangle, CheckCircle, Clock, Egg, Activity,
@@ -56,8 +55,6 @@ export default function AdminDashboard() {
   const [batchDocenas, setBatchDocenas] = useState('');
   const [batchDescarte, setBatchDescarte] = useState('');
   const [savingBatch, setSavingBatch] = useState(false);
-  const [colabLotes, setColabLotes] = useState(false);
-  const [savingFlag, setSavingFlag] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -164,21 +161,6 @@ export default function AdminDashboard() {
     document.addEventListener('visibilitychange', handleVisible);
     return () => document.removeEventListener('visibilitychange', handleVisible);
   }, [authLoading, user, profile, router, load]);
-
-  // Palanca: ¿la colaboradora puede cargar/ampliar lotes?
-  useEffect(() => {
-    if (user) getFlag(FLAG_COLAB_LOTES).then(setColabLotes);
-  }, [user]);
-
-  const toggleColabLotes = async () => {
-    if (!user || savingFlag) return;
-    const nuevo = !colabLotes;
-    setSavingFlag(true);
-    setColabLotes(nuevo);
-    const { error } = await setFlag(FLAG_COLAB_LOTES, nuevo, user.id);
-    if (error) setColabLotes(!nuevo);
-    setSavingFlag(false);
-  };
 
   // ── Procesar bandeja fértil ─────────────────────────────────────────────────
   const handleProcessBatch = async (batch: FertileBatch) => {
@@ -428,22 +410,6 @@ export default function AdminDashboard() {
               </Link>
             ))}
           </div>
-        </div>
-
-        {/* Permisos */}
-        <div>
-          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Permisos</h3>
-          <button onClick={toggleColabLotes} disabled={savingFlag}
-            className="w-full bg-white rounded-2xl border border-gray-100 p-4 flex items-center justify-between text-left disabled:opacity-60">
-            <div className="pr-3">
-              <p className="font-medium text-gray-800 text-sm">La colaboradora puede cargar y ampliar lotes</p>
-              <p className="text-xs text-gray-400 mt-0.5">Habilita el botón “Tanda” en su pantalla de aves</p>
-            </div>
-            <span className={`w-11 h-6 rounded-full flex items-center px-0.5 transition-colors shrink-0
-              ${colabLotes ? 'bg-yellow-400 justify-end' : 'bg-gray-200 justify-start'}`}>
-              <span className="w-5 h-5 rounded-full bg-white shadow" />
-            </span>
-          </button>
         </div>
 
         <Link href="/dashboard/huevos" className="btn-primary w-full py-4 text-base rounded-2xl">

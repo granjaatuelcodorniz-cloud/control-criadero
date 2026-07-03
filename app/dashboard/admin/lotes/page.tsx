@@ -14,6 +14,7 @@ import { assertSupabaseAllOk, assertSupabaseOk, getErrorMessage } from '@/lib/su
 import ReorderModal from '@/components/ReorderModal';
 import AgregarTandaModal from '@/components/AgregarTandaModal';
 import NuevoLoteForm from '@/components/NuevoLoteForm';
+import { getFlag, setFlag, FLAG_COLAB_LOTES } from '@/lib/settings';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -542,6 +543,8 @@ export default function Lotes() {
   const [reorderPair, setReorderPair] = useState<{ origin: CageSlot; destination: CageSlot; isNewSlot: boolean } | null>(null);
   const [retireLot, setRetireLot] = useState<Lot | null>(null);
   const [tandaLot, setTandaLot] = useState<Lot | null>(null);
+  const [colabLotes, setColabLotes] = useState(false);
+  const [savingFlag, setSavingFlag] = useState(false);
 
   const [loading, setLoading] = useState(false);
   const { toast, showToast, hideToast } = useToast();
@@ -569,6 +572,21 @@ export default function Lotes() {
     if (profile.role !== 'owner') { router.push('/dashboard'); return; }
     loadData();
   }, [authLoading, user, profile, router, loadData]);
+
+  // Palanca: ¿la colaboradora puede cargar/ampliar lotes?
+  useEffect(() => {
+    if (user) getFlag(FLAG_COLAB_LOTES).then(setColabLotes);
+  }, [user]);
+
+  const toggleColabLotes = async () => {
+    if (!user || savingFlag) return;
+    const nuevo = !colabLotes;
+    setSavingFlag(true);
+    setColabLotes(nuevo);
+    const { error } = await setFlag(FLAG_COLAB_LOTES, nuevo, user.id);
+    if (error) setColabLotes(!nuevo);
+    setSavingFlag(false);
+  };
 
   const flash = (message: string) => showToast(message);
 
@@ -751,6 +769,23 @@ export default function Lotes() {
               <LotCard key={lot.id} lot={lot} slots={[]} losses={losses} isOwner={isOwner}
                 freeSlots={[]} onLoss={() => {}} onReorder={() => {}} onRetire={() => {}} />
             ))}
+          </div>
+        )}
+
+        {isOwner && (
+          <div className="pt-2">
+            <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Permisos</p>
+            <button onClick={toggleColabLotes} disabled={savingFlag}
+              className="w-full bg-white rounded-2xl border border-gray-100 p-4 flex items-center justify-between text-left disabled:opacity-60">
+              <div className="pr-3">
+                <p className="font-medium text-gray-800 text-sm">La colaboradora puede cargar y ampliar lotes</p>
+                <p className="text-xs text-gray-400 mt-0.5">Habilita crear y agregar tandas en su pantalla de aves</p>
+              </div>
+              <span className={`w-11 h-6 rounded-full flex items-center px-0.5 transition-colors shrink-0
+                ${colabLotes ? 'bg-yellow-400 justify-end' : 'bg-gray-200 justify-start'}`}>
+                <span className="w-5 h-5 rounded-full bg-white shadow" />
+              </span>
+            </button>
           </div>
         )}
       </div>
