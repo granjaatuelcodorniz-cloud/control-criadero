@@ -5,12 +5,13 @@ import { supabase } from '@/lib/supabase';
 import Header from '@/components/Header';
 import {
   Plus, X, ChevronDown, ChevronUp, Skull,
-  AlertCircle, ArrowLeftRight, MoveRight, Archive,
+  AlertCircle, ArrowLeftRight, Archive,
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useRouter } from 'next/navigation';
 import { ToastViewport, useToast } from '@/components/Feedback';
 import { assertSupabaseAllOk, assertSupabaseOk, getErrorMessage } from '@/lib/supabase-ops';
+import ReorderModal from '@/components/ReorderModal';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -301,97 +302,6 @@ function LossModal({
           className="btn-primary w-full py-4 text-base shadow-yellow-200 shadow-lg">
           <Skull className="w-4 h-4" />
           {saving ? 'Guardando...' : `Confirmar ${qty} ${LOSS_TYPE_LABELS[lossType].toLowerCase()}${qty > 1 ? 's' : ''}`}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ─── Reorder Modal ────────────────────────────────────────────────────────────
-
-function ReorderModal({
-  origin, destination, isNewSlot, onClose, onConfirm,
-}: {
-  origin: CageSlot;
-  destination: CageSlot;
-  isNewSlot: boolean;
-  onClose: () => void;
-  onConfirm: (qty: number) => Promise<void>;
-}) {
-  const maxMovable = isNewSlot ? origin.quantity : Math.min(origin.quantity, 9 - destination.quantity);
-  const [qty, setQty] = useState(isNewSlot ? origin.quantity : Math.min(maxMovable, 1));
-  const [saving, setSaving] = useState(false);
-
-  const handle = async () => {
-    if (qty < 1 || qty > maxMovable) return;
-    setSaving(true);
-    await onConfirm(qty);
-    setSaving(false);
-  };
-
-  return (
-    <div className="fixed inset-0 bg-black/40 z-50 flex items-end sm:items-center justify-center p-4">
-      <div className="bg-white rounded-3xl w-full max-w-sm p-6 space-y-5 shadow-2xl">
-        <div className="flex items-start justify-between">
-          <div>
-            <h3 className="text-lg font-black text-gray-900">{isNewSlot ? 'Trasladar Boca' : 'Mover Aves'}</h3>
-            <p className="text-sm text-gray-400 mt-0.5">{isNewSlot ? 'La boca origen se liberará' : 'Reacomodamiento entre bocas'}</p>
-          </div>
-          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full transition-colors">
-            <X className="w-5 h-5 text-gray-400" />
-          </button>
-        </div>
-
-        <div className="flex items-center gap-3">
-          <div className="flex-1 bg-blue-50 border border-blue-100 rounded-2xl p-3 text-center">
-            <p className="text-[10px] font-bold uppercase text-blue-400 mb-1">Origen</p>
-            <p className="text-xl font-black text-blue-700">{origin.slot_code}</p>
-            <p className="text-xs text-blue-400 mt-0.5">{origin.quantity} aves</p>
-          </div>
-          <MoveRight className="w-5 h-5 text-gray-300 shrink-0" />
-          <div className="flex-1 bg-emerald-50 border border-emerald-100 rounded-2xl p-3 text-center">
-            <p className="text-[10px] font-bold uppercase text-emerald-400 mb-1">{isNewSlot ? 'Nueva boca' : 'Destino'}</p>
-            <p className="text-xl font-black text-emerald-700">{destination.slot_code}</p>
-            <p className="text-xs text-emerald-400 mt-0.5">
-              {isNewSlot ? `${origin.quantity} aves` : `${destination.quantity} → ${destination.quantity + qty}`}
-            </p>
-          </div>
-        </div>
-
-        {!isNewSlot && (
-          <div>
-            <label className="text-xs font-bold text-gray-500 uppercase ml-1">
-              Cantidad a mover <span className="text-gray-300 font-normal">(máx. {maxMovable})</span>
-            </label>
-            <div className="flex items-center gap-3 mt-2">
-              <button onClick={() => setQty(q => Math.max(1, q - 1))}
-                className="w-11 h-11 rounded-2xl bg-gray-100 hover:bg-gray-200 font-black text-xl flex items-center justify-center transition-colors">−</button>
-              <input type="number" min={1} max={maxMovable} value={qty}
-                onChange={e => setQty(Math.min(maxMovable, Math.max(1, Number(e.target.value))))}
-                className="input-base text-center text-2xl font-black h-11 py-0" />
-              <button onClick={() => setQty(q => Math.min(maxMovable, q + 1))}
-                className="w-11 h-11 rounded-2xl bg-gray-100 hover:bg-gray-200 font-black text-xl flex items-center justify-center transition-colors">+</button>
-            </div>
-            {qty === origin.quantity && (
-              <p className="text-xs text-amber-500 mt-1.5 ml-1 flex items-center gap-1">
-                <AlertCircle className="w-3 h-3" /> La boca origen quedará vacía y se liberará
-              </p>
-            )}
-          </div>
-        )}
-
-        {isNewSlot && (
-          <div className="bg-amber-50 border border-amber-100 rounded-2xl p-3">
-            <p className="text-xs text-amber-700 font-medium">
-              Se moverán todas las aves ({origin.quantity}) a la boca {destination.slot_code}. La boca {origin.slot_code} quedará libre.
-            </p>
-          </div>
-        )}
-
-        <button onClick={handle} disabled={saving}
-          className="btn-primary w-full py-4 text-base shadow-yellow-200 shadow-lg">
-          <ArrowLeftRight className="w-4 h-4" />
-          {saving ? 'Moviendo...' : isNewSlot ? `Trasladar ${origin.quantity} aves` : `Mover ${qty} ave${qty > 1 ? 's' : ''}`}
         </button>
       </div>
     </div>
