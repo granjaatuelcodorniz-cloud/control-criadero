@@ -3,12 +3,12 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import Header from '@/components/Header';
-import { ChevronDown, AlertCircle, Egg, PackageCheck } from 'lucide-react';
+import { ChevronDown, AlertCircle, AlertTriangle, Egg, PackageCheck } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useRouter } from 'next/navigation';
 import { ToastViewport, useToast } from '@/components/Feedback';
 import { assertSupabaseOk, getErrorMessage } from '@/lib/supabase-ops';
-import { getToday } from '@/lib/date';
+import { getToday, toDateStr } from '@/lib/date';
 
 // ─── Counter ──────────────────────────────────────────────────────────────────
 
@@ -138,14 +138,38 @@ function fechaLarga(date: string) {
   });
 }
 
+// Nombre del día: "domingo", "lunes"...
+function nombreDia(date: string) {
+  return new Date(date + 'T12:00:00').toLocaleDateString('es-AR', { weekday: 'long' });
+}
+
+// Fecha de hace n días, en hora local ('YYYY-MM-DD').
+function diasAtras(n: number) {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return toDateStr(d);
+}
+
+// Reparte un total entero en n partes lo más parejas posible (suman exactamente el total).
+function repartirParejo(total: number, n: number): number[] {
+  const base = Math.floor(total / n);
+  const resto = total - base * n;
+  return Array.from({ length: n }, (_, i) => base + (i < resto ? 1 : 0));
+}
+
+// Tope biológico: una jornada no puede tener más huevos que aves (con un margen).
+const TOPE_POSTURA = 0.95;
+
 // ─── Tarjeta de empaque de un día ──────────────────────────────────────────────
 
 function EmpaqueCard({
   day,
+  avesActivas,
   onSaved,
   showToast,
 }: {
   day: ConsumoDay;
+  avesActivas: number;
   onSaved: () => Promise<void>;
   showToast: (msg: string, type?: 'success' | 'error') => void;
 }) {
@@ -161,6 +185,11 @@ function EmpaqueCard({
 
   const valido = (bandejas ?? 0) > 0 || (docenas ?? 0) > 0 || (rotos ?? 0) > 0;
   const pct = day.recolectadas > 0 ? Math.round((day.empacadas / day.recolectadas) * 100) : 0;
+
+  // Tope biológico: docenas del día (lo ya empacado + esta tanda) contra las aves.
+  const huevosDia = (day.docenas + (docenas ?? 0)) * 12 + (day.rotos + (rotos ?? 0));
+  const posturaDia = avesActivas > 0 ? Math.round((huevosDia / avesActivas) * 100) : 0;
+  const capExcedido = avesActivas > 0 && huevosDia > Math.round(avesActivas * TOPE_POSTURA);
 
   const handleSave = async () => {
     if (!valido || !user) return;
@@ -222,11 +251,20 @@ function EmpaqueCard({
           <Counter label="Docenas armadas" value={docenas} onChange={setDocenas} />
           <Counter label="Rotos" sublabel="Unidades" value={rotos} onChange={setRotos} />
         </div>
+        {capExcedido && (
+          <div className="flex gap-2 bg-red-50 border border-red-200 rounded-xl p-3">
+            <AlertTriangle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+            <p className="text-xs text-red-700">
+              Son {huevosDia} huevos para {avesActivas} aves ({posturaDia}%). Parece de más de un día — revisá la fecha.
+            </p>
+          </div>
+        )}
         <button
           onClick={handleSave}
           disabled={saving || !valido}
-          className="btn-primary w-full py-3.5 text-base disabled:opacity-40 disabled:cursor-not-allowed">
-          {saving ? 'Guardando...' : 'Guardar empaque'}
+          className={`w-full py-3.5 text-base font-bold rounded-2xl transition-colors disabled:opacity-40 disabled:cursor-not-allowed
+            ${capExcedido ? 'bg-red-500 hover:bg-red-600 text-white' : 'btn-primary'}`}>
+          {saving ? 'Guardando...' : capExcedido ? 'Guardar igual' : 'Guardar empaque'}
         </button>
       </div>
     </div>
@@ -247,6 +285,16 @@ export default function RegistroHuevos() {
   const [bandFertiles, setBandFertiles] = useState<number | null>(null);
   const [notasRec, setNotasRec] = useState('');
   const [yaHayRec, setYaHayRec] = useState(false);
+
+  // ── Blindajes: aves activas, días pendientes y repartidor ──
+  const [avesActivas, setAvesActivas] = useState(0);
+  const [diasPendientes, setDiasPendientes] = useState<string[]>([]);
+  const [descartados, setDescartados] = useState<string[]>([]);
+  const [repartoDay, setRepartoDay] = useState<string | null>(null);
+  const [repBandejas, setRepBandejas] = useState<number | null>(null);
+  const [repDocenas, setRepDocenas] = useState<number | null>(null);
+  const [repRotos, setRepRotos] = useState<number | null>(null);
+  const [savingReparto, setSavingReparto] = useState(false);
 
   // ── Empaque de consumo ──
   const [consumoDays, setConsumoDays] = useState<ConsumoDay[]>([]);
@@ -315,11 +363,32 @@ export default function RegistroHuevos() {
     if (data) setPendingBatches(data);
   }, [user]);
 
+  const loadAves = useCallback(async () => {
+    const { data } = await supabase.from('cage_slots').select('quantity');
+    if (data) setAvesActivas(data.reduce((s, r) => s + (r.quantity ?? 0), 0));
+  }, []);
+
+  // Días de los últimos 3 sin ninguna recolección cargada (para avisar de días pendientes).
+  const loadPendientes = useCallback(async () => {
+    if (!user) return;
+    const { data } = await supabase.from('daily_records').select('date').gte('date', diasAtras(3));
+    const conReco = new Set((data ?? []).map(r => r.date));
+    const hoy = getToday();
+    const pend: string[] = [];
+    for (let i = 1; i <= 3; i++) {
+      const d = diasAtras(i);
+      if (d !== hoy && !conReco.has(d)) pend.push(d);
+    }
+    setDiasPendientes(pend);
+  }, [user]);
+
   useEffect(() => {
     if (!authLoading && !user) router.push('/');
   }, [user, authLoading, router]);
 
+  useEffect(() => { if (user) loadAves(); }, [user, loadAves]);
   useEffect(() => { checkExistingRec(dateRec); }, [dateRec, checkExistingRec]);
+  useEffect(() => { if (activeTab === 'recoleccion' && user) loadPendientes(); }, [activeTab, user, loadPendientes]);
   useEffect(() => { if (activeTab === 'empaque' && user) loadConsumoDays(); }, [activeTab, user, loadConsumoDays]);
   useEffect(() => { if (activeTab === 'fertiles' && user) loadPendingBatches(); }, [activeTab, user, loadPendingBatches]);
 
@@ -340,6 +409,7 @@ export default function RegistroHuevos() {
 
   // ── Guardar recolección ──
   const recValido = (bandConsumo ?? 0) > 0 || (bandFertiles ?? 0) > 0;
+  const pendientesVisibles = diasPendientes.filter(d => !descartados.includes(d));
   const handleSubmitRec = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!recValido || !user) return;
@@ -371,10 +441,60 @@ export default function RegistroHuevos() {
       setNotasRec('');
       setDateRec(getToday());
       setYaHayRec(true);
+      await loadPendientes();
     } catch (error) {
       showToast(getErrorMessage(error, 'No se pudo guardar la recolección.'), 'error');
     } finally {
       setLoading(false);
+    }
+  };
+
+  // ── Repartir producción mezclada entre el día pendiente y hoy (mitad y mitad) ──
+  const handleReparto = async () => {
+    if (!user || !repartoDay) return;
+    const totalB = repBandejas ?? 0;
+    const totalD = repDocenas ?? 0;
+    const totalR = repRotos ?? 0;
+    if (totalB <= 0 && totalD <= 0) return;
+    setSavingReparto(true);
+    try {
+      const dias = [repartoDay, getToday()];
+      const band = repartirParejo(totalB, dias.length);
+      const doc = repartirParejo(totalD, dias.length);
+      const rot = repartirParejo(totalR, dias.length);
+      const now = new Date();
+      const hora = now.toTimeString().split(' ')[0];
+
+      // Recolección por día (bandejas repartidas).
+      assertSupabaseOk(await supabase.from('daily_records').insert(
+        dias.map((d, i) => ({
+          date: d, user_id: user.id,
+          bandejas_consumo: band[i], bandejas_fertiles: 0,
+          docenas_armadas: 0, huevos_rotos: 0,
+          notas: 'Repartido entre días', registered_at: hora,
+        }))
+      ));
+
+      // Empaque por día solo si ya viene con producción (docenas/rotos).
+      if (totalD > 0 || totalR > 0) {
+        assertSupabaseOk(await supabase.from('consumo_empaque').insert(
+          dias.map((d, i) => ({
+            date: d, user_id: user.id,
+            bandejas: band[i], docenas: doc[i], rotos: rot[i], registered_at: hora,
+          }))
+        ));
+      }
+
+      showToast('Repartido entre los dos días');
+      setRepartoDay(null);
+      setRepBandejas(null);
+      setRepDocenas(null);
+      setRepRotos(null);
+      await loadPendientes();
+    } catch (error) {
+      showToast(getErrorMessage(error, 'No se pudo repartir.'), 'error');
+    } finally {
+      setSavingReparto(false);
     }
   };
 
@@ -441,45 +561,123 @@ export default function RegistroHuevos() {
         </div>
 
         {/* ── Recolección ── */}
-        {activeTab === 'recoleccion' && (
-          <form onSubmit={handleSubmitRec} className="space-y-4">
-            <div className="card">
-              <DatePicker value={dateRec} onChange={setDateRec} />
-            </div>
-
-            {yaHayRec && (
-              <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3">
-                <AlertCircle className="w-4 h-4 text-amber-500 shrink-0" />
-                <p className="text-sm text-amber-700 font-medium">
-                  Ya hay una recolección hoy. Podés sumar otra si juntaste más.
+        {activeTab === 'recoleccion' && repartoDay && (
+          <div className="space-y-4">
+            <div className="card space-y-5">
+              <div>
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Repartir producción entre días</p>
+                <p className="text-sm text-gray-600 mt-1">
+                  Poné el total que juntaste. Se divide mitad y mitad entre <span className="font-semibold capitalize">{nombreDia(repartoDay)}</span> y hoy.
                 </p>
               </div>
-            )}
+              <Counter label="Total de bandejas de consumo" value={repBandejas} onChange={setRepBandejas} />
+              <div className="grid grid-cols-2 gap-3">
+                <Counter label="Total docenas" value={repDocenas} onChange={setRepDocenas} />
+                <Counter label="Total rotos" value={repRotos} onChange={setRepRotos} />
+              </div>
 
-            <div className="card space-y-5">
-              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Bandejas juntadas</p>
-              <Counter label="Bandejas de consumo" value={bandConsumo} onChange={setBandConsumo} />
-              <Counter label="Bandejas de fértiles" value={bandFertiles} onChange={setBandFertiles} />
+              <div className="grid grid-cols-2 gap-3">
+                {[repartoDay, getToday()].map((d, i) => {
+                  const ban = repartirParejo(repBandejas ?? 0, 2)[i];
+                  const doc = repartirParejo(repDocenas ?? 0, 2)[i];
+                  const rot = repartirParejo(repRotos ?? 0, 2)[i];
+                  const huevos = doc * 12 + rot;
+                  const postura = avesActivas > 0 ? Math.round((huevos / avesActivas) * 100) : null;
+                  const imposible = postura != null && postura > TOPE_POSTURA * 100;
+                  return (
+                    <div key={d} className={`rounded-xl border p-3 ${imposible ? 'bg-red-50 border-red-200' : 'bg-green-50 border-green-200'}`}>
+                      <p className={`text-sm font-bold capitalize ${imposible ? 'text-red-700' : 'text-green-800'}`}>
+                        {d === getToday() ? 'Hoy' : nombreDia(d)}
+                      </p>
+                      <p className={`text-xs mt-0.5 ${imposible ? 'text-red-600' : 'text-green-600'}`}>{ban} band · {doc} doc</p>
+                      {postura != null && (
+                        <p className={`text-lg font-black mt-1 ${imposible ? 'text-red-700' : 'text-green-800'}`}>{postura}%</p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  onClick={handleReparto}
+                  disabled={savingReparto || ((repBandejas ?? 0) <= 0 && (repDocenas ?? 0) <= 0)}
+                  className="btn-primary flex-1 py-3.5 text-base disabled:opacity-40 disabled:cursor-not-allowed">
+                  {savingReparto ? 'Guardando...' : 'Guardar los dos días'}
+                </button>
+                <button onClick={() => setRepartoDay(null)} className="btn-secondary px-4">Cancelar</button>
+              </div>
             </div>
+          </div>
+        )}
 
-            <div className="card">
-              <label className="text-sm font-medium text-gray-500 mb-2 block">Notas opcionales</label>
-              <textarea
-                value={notasRec}
-                onChange={e => setNotasRec(e.target.value)}
-                rows={3}
-                className="input-base resize-none"
-                placeholder="Alguna observación del día..."
-              />
-            </div>
+        {activeTab === 'recoleccion' && !repartoDay && (
+          <div className="space-y-4">
+            {pendientesVisibles.map(d => (
+              <div key={d} className="bg-amber-50 border border-amber-200 rounded-2xl p-4">
+                <div className="flex gap-3">
+                  <AlertCircle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <p className="text-sm font-semibold text-amber-800 capitalize">Falta la recolección del {nombreDia(d)}</p>
+                    <p className="text-xs text-amber-700/90 mt-0.5">Si juntaste huevos ese día, cargalos para no mezclar la producción.</p>
+                    <div className="flex flex-wrap gap-2 mt-3">
+                      <button onClick={() => setDateRec(d)}
+                        className="text-xs font-bold bg-amber-400 text-amber-950 px-3 py-1.5 rounded-lg capitalize">
+                        Cargar el {nombreDia(d)} aparte
+                      </button>
+                      <button onClick={() => { setRepartoDay(d); setRepBandejas(null); setRepDocenas(null); setRepRotos(null); }}
+                        className="text-xs font-bold bg-white border border-amber-300 text-amber-700 px-3 py-1.5 rounded-lg">
+                        Repartir mitad y mitad
+                      </button>
+                      <button onClick={() => setDescartados(p => [...p, d])}
+                        className="text-xs font-medium text-amber-600 px-2 py-1.5">
+                        No junté ese día
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
 
-            <button
-              type="submit"
-              disabled={loading || !recValido}
-              className="btn-primary w-full py-4 text-base disabled:opacity-40 disabled:cursor-not-allowed">
-              {loading ? 'Guardando...' : 'Guardar recolección'}
-            </button>
-          </form>
+            <form onSubmit={handleSubmitRec} className="space-y-4">
+              <div className="card">
+                <DatePicker value={dateRec} onChange={setDateRec} />
+              </div>
+
+              {yaHayRec && (
+                <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3">
+                  <AlertCircle className="w-4 h-4 text-amber-500 shrink-0" />
+                  <p className="text-sm text-amber-700 font-medium">
+                    Ya hay una recolección para este día. Podés sumar otra si juntaste más.
+                  </p>
+                </div>
+              )}
+
+              <div className="card space-y-5">
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Bandejas juntadas</p>
+                <Counter label="Bandejas de consumo" value={bandConsumo} onChange={setBandConsumo} />
+                <Counter label="Bandejas de fértiles" value={bandFertiles} onChange={setBandFertiles} />
+              </div>
+
+              <div className="card">
+                <label className="text-sm font-medium text-gray-500 mb-2 block">Notas opcionales</label>
+                <textarea
+                  value={notasRec}
+                  onChange={e => setNotasRec(e.target.value)}
+                  rows={3}
+                  className="input-base resize-none"
+                  placeholder="Alguna observación del día..."
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={loading || !recValido}
+                className="btn-primary w-full py-4 text-base disabled:opacity-40 disabled:cursor-not-allowed">
+                {loading ? 'Guardando...' : 'Guardar recolección'}
+              </button>
+            </form>
+          </div>
         )}
 
         {/* ── Empaque de consumo ── */}
@@ -493,7 +691,7 @@ export default function RegistroHuevos() {
               </div>
             ) : (
               consumoDays.map(day => (
-                <EmpaqueCard key={day.date} day={day} onSaved={loadConsumoDays} showToast={showToast} />
+                <EmpaqueCard key={day.date} day={day} avesActivas={avesActivas} onSaved={loadConsumoDays} showToast={showToast} />
               ))
             )}
           </div>
