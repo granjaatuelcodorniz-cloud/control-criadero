@@ -6,10 +6,12 @@ import { useAuth } from '@/contexts/AuthContext';
 import Header from '@/components/Header';
 import { useRouter } from 'next/navigation';
 import { ToastViewport, useToast } from '@/components/Feedback';
-import { assertSupabaseAllOk, getErrorMessage } from '@/lib/supabase-ops';
+import { assertSupabaseAllOk, assertSupabaseOk, getErrorMessage } from '@/lib/supabase-ops';
+import { getFlag, FLAG_COLAB_LOTES } from '@/lib/settings';
 import ReorderModal from '@/components/ReorderModal';
+import AgregarTandaModal from '@/components/AgregarTandaModal';
 import {
-  X, ChevronDown, ChevronUp, Skull,
+  X, ChevronDown, ChevronUp, Skull, Plus,
   AlertCircle, ArrowLeftRight,
 } from 'lucide-react';
 
@@ -260,13 +262,14 @@ function LossModal({
 // ─── Lot Card ─────────────────────────────────────────────────────────────────
 
 function LotCard({
-  lot, slots, freeSlots, onLoss, onReorder,
+  lot, slots, freeSlots, onLoss, onReorder, onAddTanda,
 }: {
   lot: Lot;
   slots: CageSlot[];
   freeSlots: string[];
   onLoss: (slot: CageSlot) => void;
   onReorder: (origin: CageSlot, destination: CageSlot, isNewSlot: boolean) => void;
+  onAddTanda?: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [reorderMode, setReorderMode] = useState(false);
@@ -351,12 +354,20 @@ function LotCard({
                 ) : (
                   <p className="text-[10px] text-gray-400 font-medium">Tocá una boca para registrar una baja</p>
                 )}
-                <button onClick={() => reorderMode ? exitReorder() : setReorderMode(true)}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all
-                    ${reorderMode ? 'bg-blue-100 text-blue-700 hover:bg-blue-200' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}>
-                  <ArrowLeftRight className="w-3 h-3" />
-                  {reorderMode ? 'Salir' : 'Reacomodar'}
-                </button>
+                <div className="flex items-center gap-2">
+                  {onAddTanda && !reorderMode && (
+                    <button onClick={onAddTanda}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-yellow-100 text-yellow-700 hover:bg-yellow-200 transition-all">
+                      <Plus className="w-3 h-3" /> Tanda
+                    </button>
+                  )}
+                  <button onClick={() => reorderMode ? exitReorder() : setReorderMode(true)}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all
+                      ${reorderMode ? 'bg-blue-100 text-blue-700 hover:bg-blue-200' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}>
+                    <ArrowLeftRight className="w-3 h-3" />
+                    {reorderMode ? 'Salir' : 'Reacomodar'}
+                  </button>
+                </div>
               </div>
 
               <SlotGrid
@@ -386,6 +397,8 @@ export default function LotesColaboradora() {
 
   const [selectedSlot, setSelectedSlot] = useState<{ slot: CageSlot; lot: Lot } | null>(null);
   const [reorderPair, setReorderPair] = useState<{ origin: CageSlot; destination: CageSlot; isNewSlot: boolean } | null>(null);
+  const [tandaLot, setTandaLot] = useState<Lot | null>(null);
+  const [puedeGestionarLotes, setPuedeGestionarLotes] = useState(false);
 
   const [loading, setLoading] = useState(false);
   const { toast, showToast, hideToast } = useToast();
@@ -411,6 +424,12 @@ export default function LotesColaboradora() {
     if (profile.role === 'owner') { router.push('/dashboard/admin'); return; }
     loadData();
   }, [authLoading, user, profile, router, loadData]);
+
+  // Palanca del owner: habilita cargar/ampliar lotes para la colaboradora.
+  useEffect(() => {
+    if (!user) return;
+    getFlag(FLAG_COLAB_LOTES).then(setPuedeGestionarLotes);
+  }, [user]);
 
   const flash = (message: string) => showToast(message);
 
@@ -461,6 +480,23 @@ export default function LotesColaboradora() {
       await loadData();
     } catch (error) {
       showToast(getErrorMessage(error, 'No se pudo mover las aves.'), 'error');
+    }
+  };
+
+  const handleAgregarTanda = async (lot: Lot, nuevos: { slot_code: string; quantity: number }[]) => {
+    if (!user || nuevos.length === 0) return;
+    const total = nuevos.reduce((s, x) => s + x.quantity, 0);
+    try {
+      assertSupabaseOk(await supabase.from('cage_slots').insert(nuevos.map(s => ({ lot_id: lot.id, slot_code: s.slot_code, quantity: s.quantity }))));
+      assertSupabaseOk(await supabase.from('lots').update({
+        current_quantity: lot.current_quantity + total,
+        initial_quantity: lot.initial_quantity + total,
+      }).eq('id', lot.id));
+      setTandaLot(null);
+      flash(`Tanda agregada · ${total} aves`);
+      await loadData();
+    } catch (error) {
+      showToast(getErrorMessage(error, 'No se pudo agregar la tanda.'), 'error');
     }
   };
 
@@ -521,6 +557,7 @@ export default function LotesColaboradora() {
                 freeSlots={freeSlotCodes}
                 onLoss={slot => setSelectedSlot({ slot, lot })}
                 onReorder={(origin, destination, isNewSlot) => setReorderPair({ origin, destination, isNewSlot })}
+                onAddTanda={puedeGestionarLotes ? () => setTandaLot(lot) : undefined}
               />
             ))}
           </div>
@@ -535,6 +572,11 @@ export default function LotesColaboradora() {
       {reorderPair && (
         <ReorderModal origin={reorderPair.origin} destination={reorderPair.destination}
           isNewSlot={reorderPair.isNewSlot} onClose={() => setReorderPair(null)} onConfirm={handleReorder} />
+      )}
+
+      {tandaLot && (
+        <AgregarTandaModal lot={tandaLot} occupiedSlots={occupiedSlotCodes}
+          onClose={() => setTandaLot(null)} onConfirm={slots => handleAgregarTanda(tandaLot, slots)} />
       )}
     </div>
   );

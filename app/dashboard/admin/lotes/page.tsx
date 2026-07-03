@@ -12,6 +12,7 @@ import { useRouter } from 'next/navigation';
 import { ToastViewport, useToast } from '@/components/Feedback';
 import { assertSupabaseAllOk, assertSupabaseOk, getErrorMessage } from '@/lib/supabase-ops';
 import ReorderModal from '@/components/ReorderModal';
+import AgregarTandaModal from '@/components/AgregarTandaModal';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -521,7 +522,7 @@ function NewLotForm({
 // ─── Lot Card ─────────────────────────────────────────────────────────────────
 
 function LotCard({
-  lot, slots, losses, isOwner, freeSlots, onLoss, onReorder, onRetire,
+  lot, slots, losses, isOwner, freeSlots, onLoss, onReorder, onRetire, onAddTanda,
 }: {
   lot: Lot;
   slots: CageSlot[];
@@ -531,6 +532,7 @@ function LotCard({
   onLoss: (slot: CageSlot) => void;
   onReorder: (origin: CageSlot, destination: CageSlot, isNewSlot: boolean) => void;
   onRetire: (lot: Lot) => void;
+  onAddTanda?: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [reorderMode, setReorderMode] = useState(false);
@@ -663,14 +665,22 @@ function LotCard({
             ) : (
               <p className="text-[10px] text-gray-400 font-medium">Tocá una boca para registrar una baja</p>
             )}
-            {isOwner && (
-              <button onClick={() => reorderMode ? exitReorder() : setReorderMode(true)}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all
-                  ${reorderMode ? 'bg-blue-100 text-blue-700 hover:bg-blue-200' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}>
-                <ArrowLeftRight className="w-3 h-3" />
-                {reorderMode ? 'Salir' : 'Reacomodar'}
-              </button>
-            )}
+            <div className="flex items-center gap-2">
+              {onAddTanda && !reorderMode && (
+                <button onClick={onAddTanda}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-yellow-100 text-yellow-700 hover:bg-yellow-200 transition-all">
+                  <Plus className="w-3 h-3" /> Tanda
+                </button>
+              )}
+              {isOwner && (
+                <button onClick={() => reorderMode ? exitReorder() : setReorderMode(true)}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all
+                    ${reorderMode ? 'bg-blue-100 text-blue-700 hover:bg-blue-200' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}>
+                  <ArrowLeftRight className="w-3 h-3" />
+                  {reorderMode ? 'Salir' : 'Reacomodar'}
+                </button>
+              )}
+            </div>
           </div>
 
           <SlotGrid
@@ -702,6 +712,7 @@ export default function Lotes() {
   const [selectedSlot, setSelectedSlot] = useState<{ slot: CageSlot; lot: Lot } | null>(null);
   const [reorderPair, setReorderPair] = useState<{ origin: CageSlot; destination: CageSlot; isNewSlot: boolean } | null>(null);
   const [retireLot, setRetireLot] = useState<Lot | null>(null);
+  const [tandaLot, setTandaLot] = useState<Lot | null>(null);
 
   const [loading, setLoading] = useState(false);
   const { toast, showToast, hideToast } = useToast();
@@ -816,6 +827,25 @@ export default function Lotes() {
     }
   };
 
+  // Agregar una tanda a un lote existente (misma partida en dos entregas):
+  // crea las bocas y suma las aves al inicial y al actual.
+  const handleAgregarTanda = async (lot: Lot, nuevos: { slot_code: string; quantity: number }[]) => {
+    if (!user || nuevos.length === 0) return;
+    const total = nuevos.reduce((s, x) => s + x.quantity, 0);
+    try {
+      assertSupabaseOk(await supabase.from('cage_slots').insert(nuevos.map(s => ({ lot_id: lot.id, slot_code: s.slot_code, quantity: s.quantity }))));
+      assertSupabaseOk(await supabase.from('lots').update({
+        current_quantity: lot.current_quantity + total,
+        initial_quantity: lot.initial_quantity + total,
+      }).eq('id', lot.id));
+      setTandaLot(null);
+      flash(`Tanda agregada · ${total} aves`);
+      await loadData();
+    } catch (error) {
+      showToast(getErrorMessage(error, 'No se pudo agregar la tanda.'), 'error');
+    }
+  };
+
   const occupiedSlotCodes = new Set(slots.filter(s => s.quantity > 0).map(s => s.slot_code));
   const allPossibleCodes = ROWS.flatMap(r => Array.from({ length: TOTAL_COLS }, (_, i) => `${r}${i + 1}`));
   const freeSlotCodes = allPossibleCodes.filter(c => !occupiedSlotCodes.has(c));
@@ -869,6 +899,7 @@ export default function Lotes() {
               onLoss={slot => setSelectedSlot({ slot, lot })}
               onReorder={(origin, destination, isNewSlot) => setReorderPair({ origin, destination, isNewSlot })}
               onRetire={setRetireLot}
+              onAddTanda={() => setTandaLot(lot)}
             />
           ))}
         </div>
@@ -909,6 +940,11 @@ export default function Lotes() {
         <RetireLotModal lot={retireLot}
           totalAves={slots.filter(s => s.lot_id === retireLot.id).reduce((s, sl) => s + sl.quantity, 0)}
           onClose={() => setRetireLot(null)} onConfirm={handleRetire} />
+      )}
+
+      {tandaLot && (
+        <AgregarTandaModal lot={tandaLot} occupiedSlots={occupiedSlotCodes}
+          onClose={() => setTandaLot(null)} onConfirm={slots => handleAgregarTanda(tandaLot, slots)} />
       )}
     </div>
   );
