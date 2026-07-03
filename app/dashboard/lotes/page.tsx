@@ -10,6 +10,7 @@ import { assertSupabaseAllOk, assertSupabaseOk, getErrorMessage } from '@/lib/su
 import { getFlag, FLAG_COLAB_LOTES } from '@/lib/settings';
 import ReorderModal from '@/components/ReorderModal';
 import AgregarTandaModal from '@/components/AgregarTandaModal';
+import NuevoLoteForm from '@/components/NuevoLoteForm';
 import {
   X, ChevronDown, ChevronUp, Skull, Plus,
   AlertCircle, ArrowLeftRight,
@@ -397,6 +398,7 @@ export default function LotesColaboradora() {
   const [selectedSlot, setSelectedSlot] = useState<{ slot: CageSlot; lot: Lot } | null>(null);
   const [reorderPair, setReorderPair] = useState<{ origin: CageSlot; destination: CageSlot; isNewSlot: boolean } | null>(null);
   const [tandaLot, setTandaLot] = useState<Lot | null>(null);
+  const [showNewLot, setShowNewLot] = useState(false);
   const [puedeGestionarLotes, setPuedeGestionarLotes] = useState(false);
 
   const [loading, setLoading] = useState(false);
@@ -499,6 +501,23 @@ export default function LotesColaboradora() {
     }
   };
 
+  const handleNewLot = async (data: { code: string; start_date: string; notes: string; slots: { slot_code: string; quantity: number }[] }) => {
+    if (!user) return;
+    const totalQty = data.slots.reduce((s, sl) => s + sl.quantity, 0);
+    try {
+      const { data: lotData } = assertSupabaseOk(await supabase.from('lots')
+        .insert({ code: data.code, start_date: data.start_date, initial_quantity: totalQty, current_quantity: totalQty, notes: data.notes || null, created_by: user.id })
+        .select().single());
+      if (!lotData) throw new Error('No se pudo crear el lote.');
+      assertSupabaseOk(await supabase.from('cage_slots').insert(data.slots.map(s => ({ lot_id: lotData.id, slot_code: s.slot_code, quantity: s.quantity }))));
+      setShowNewLot(false);
+      flash('Lote creado');
+      await loadData();
+    } catch (error) {
+      showToast(getErrorMessage(error, 'No se pudo crear el lote.'), 'error');
+    }
+  };
+
   const occupiedSlotCodes = new Set(slots.filter(s => s.quantity > 0).map(s => s.slot_code));
   const allPossibleCodes = ROWS.flatMap(r => Array.from({ length: TOTAL_COLS }, (_, i) => `${r}${i + 1}`));
   const freeSlotCodes = allPossibleCodes.filter(c => !occupiedSlotCodes.has(c));
@@ -560,6 +579,17 @@ export default function LotesColaboradora() {
               />
             ))}
           </div>
+        )}
+
+        {puedeGestionarLotes && (
+          !showNewLot ? (
+            <button onClick={() => setShowNewLot(true)}
+              className="w-full py-5 rounded-3xl border-2 border-dashed border-gray-200 text-gray-400 hover:border-yellow-400 hover:text-yellow-600 hover:bg-yellow-50/50 transition-all flex items-center justify-center gap-3 font-bold">
+              <Plus className="w-5 h-5" /> Agregar Nuevo Lote
+            </button>
+          ) : (
+            <NuevoLoteForm onSave={handleNewLot} onCancel={() => setShowNewLot(false)} occupiedSlots={occupiedSlotCodes} />
+          )
         )}
       </div>
 
