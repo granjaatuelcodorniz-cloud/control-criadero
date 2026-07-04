@@ -8,6 +8,12 @@ import { createBrowserClient } from '@supabase/ssr'
 const REQUEST_TIMEOUT_MS = 15000
 
 function fetchConTimeout(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  // Sin conexión: fallar al instante en vez de esperar el timeout completo.
+  // Así las pantallas caen rápido a los datos cacheados (no se quedan "Cargando" 15s).
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    return Promise.reject(new TypeError('Sin conexión'))
+  }
+
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
 
