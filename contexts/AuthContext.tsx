@@ -4,6 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useState, useRef, us
 import { createClient } from '@/lib/supabase';
 import { User } from '@supabase/supabase-js';
 import { useRouter } from 'next/navigation';
+import { saveProfile, loadProfile } from '@/lib/profile-cache';
 
 type Profile = {
   full_name: string;
@@ -42,13 +43,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       .eq('id', userId)
       .single();
 
-    if (error) {
-      console.error('Error cargando perfil:', error);
-      return null;
+    if (!error && data) {
+      setProfile(data);
+      saveProfile(userId, data);
+      return data;
     }
 
-    setProfile(data);
-    return data;
+    // Sin señal (o error): usar el perfil cacheado para no patear al login.
+    const cached = loadProfile(userId);
+    if (cached) {
+      setProfile(cached);
+      return cached;
+    }
+    console.error('Error cargando perfil:', error);
+    return null;
   }, [supabase]);
 
   const redirectByRole = useCallback((role: Profile['role']) => {

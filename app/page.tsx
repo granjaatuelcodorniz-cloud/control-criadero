@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { createClient } from '@/lib/supabase';
+import { loadProfile, saveProfile } from '@/lib/profile-cache';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 
@@ -16,6 +17,17 @@ export default function Login() {
   const [error, setError] = useState('');
   const [inviteEmail, setInviteEmail] = useState('');
   const router = useRouter();
+
+  // Si ya hay sesión guardada (aunque esté offline), entrar directo sin pedir login.
+  // Solo si tenemos el perfil cacheado, para saber el rol y no rebotar.
+  useEffect(() => {
+    const supabase = createClient();
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!session?.user) return;
+      const cached = loadProfile(session.user.id);
+      if (cached) router.replace(cached.role === 'owner' ? '/dashboard/admin' : '/dashboard');
+    });
+  }, [router]);
 
   // Detectar token de invitación en la URL (#access_token=...)
   useEffect(() => {
@@ -58,16 +70,22 @@ export default function Login() {
     });
 
     if (signInError || !data.user) {
-      setError('Email o contraseña incorrectos. Verificá los datos.');
+      const sinSenal = (typeof navigator !== 'undefined' && !navigator.onLine)
+        || /fetch|network|failed|timeout|conexi/i.test(signInError?.message ?? '');
+      setError(sinSenal
+        ? 'Sin conexión. Necesitás internet para iniciar sesión la primera vez.'
+        : 'Email o contraseña incorrectos. Verificá los datos.');
       setLoading(false);
       return;
     }
 
     const { data: profile } = await supabase
       .from('profiles')
-      .select('role')
+      .select('full_name, role')
       .eq('id', data.user.id)
       .single();
+
+    if (profile) saveProfile(data.user.id, profile);
 
     if (profile?.role === 'owner') {
       router.push('/dashboard/admin');
