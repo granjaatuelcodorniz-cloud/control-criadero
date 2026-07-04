@@ -9,6 +9,7 @@ import { useRouter } from 'next/navigation';
 import { ToastViewport, useToast } from '@/components/Feedback';
 import { assertSupabaseOk, getErrorMessage } from '@/lib/supabase-ops';
 import { getToday, toDateStr } from '@/lib/date';
+import { guardarRecoleccion } from '@/lib/offline-sync';
 
 // ─── Counter ──────────────────────────────────────────────────────────────────
 
@@ -417,38 +418,32 @@ export default function RegistroHuevos() {
     e.preventDefault();
     if (!recValido || !user) return;
     setLoading(true);
+    const nFert = bandFertiles ?? 0;
+    let modo: 'online' | 'offline' | null = null;
     try {
-      const now = new Date();
-      assertSupabaseOk(await supabase.from('daily_records').insert({
+      // Guarda online; si no hay señal, queda en la cola del celular y se sincroniza después.
+      modo = await guardarRecoleccion({
         date: dateRec,
         user_id: user.id,
         bandejas_consumo: bandConsumo ?? 0,
-        bandejas_fertiles: bandFertiles ?? 0,
-        docenas_armadas: 0,
-        huevos_rotos: 0,
+        bandejas_fertiles: nFert,
         notas: notasRec.trim() || null,
-        registered_at: now.toTimeString().split(' ')[0],
-      }));
-
-      // Cada bandeja de fértiles queda pendiente de procesar (la trabaja el owner).
-      const nFert = bandFertiles ?? 0;
-      if (nFert > 0) {
-        const batches = Array.from({ length: nFert }, () => ({
-          date: dateRec, user_id: user.id, status: 'pendiente',
-        }));
-        assertSupabaseOk(await supabase.from('fertile_batches').insert(batches));
-      }
-      showToast('Recolección guardada' + (nFert > 0 ? ` · ${nFert} bandeja${nFert > 1 ? 's' : ''} fértil${nFert > 1 ? 'es' : ''} pendiente${nFert > 1 ? 's' : ''}` : ''));
-      setBandConsumo(null);
-      setBandFertiles(null);
-      setNotasRec('');
-      setDateRec(getToday());
-      setYaHayRec(true);
+        registered_at: new Date().toTimeString().split(' ')[0],
+      });
     } catch (error) {
       showToast(getErrorMessage(error, 'No se pudo guardar la recolección.'), 'error');
     } finally {
       setLoading(false);
     }
+    if (!modo) return;
+    showToast(modo === 'offline'
+      ? 'Guardado en el celular · se sincroniza al volver la señal'
+      : 'Recolección guardada' + (nFert > 0 ? ` · ${nFert} bandeja${nFert > 1 ? 's' : ''} fértil${nFert > 1 ? 'es' : ''} pendiente${nFert > 1 ? 's' : ''}` : ''));
+    setBandConsumo(null);
+    setBandFertiles(null);
+    setNotasRec('');
+    setDateRec(getToday());
+    setYaHayRec(true);
     // La recarga va aparte para no dejar el botón colgado si tarda.
     void loadPendientes();
   };
