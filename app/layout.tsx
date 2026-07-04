@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { AuthProvider } from "@/contexts/AuthContext";
 import BottomNav from "@/components/BottomNav";
+import ServiceWorkerRegister from "@/components/ServiceWorkerRegister";
 
 export const metadata: Metadata = {
   title: "ControlCriadero - Granja Atuel",
@@ -34,6 +35,7 @@ export default function RootLayout({
           {children}
           <BottomNav />
         </AuthProvider>
+        <ServiceWorkerRegister />
       </body>
     </html>
   );
