@@ -1,12 +1,14 @@
-// Service worker de Granja Atuel — Fase 1: que la app abra sin conexión + más rápida.
+// Service worker de Granja Atuel — offline.
 // Estrategia segura:
-//  - Páginas (navegación): network-first → con señal siempre lo último; sin señal, lo cacheado.
 //  - Estáticos con hash (/_next/static, imágenes, fuentes): cache-first (inmutables por hash).
-//  - Llamadas a Supabase u otros orígenes: NO se tocan (van directo a la red; el offline de
-//    datos se maneja en la app, Fase 2).
+//  - Resto de same-origin (páginas + transiciones RSC del App Router): network-first con fallback
+//    a caché → con señal siempre lo último (nunca queda pegado a versión vieja); sin señal, lo
+//    cacheado, así la navegación interna funciona offline.
+//  - Llamadas a Supabase u otros orígenes: NO se tocan (van directo a la red; el offline de datos
+//    lo maneja la app).
 // Subir VERSION invalida cachés viejos.
 
-const VERSION = 'v1';
+const VERSION = 'v2';
 const STATIC_CACHE = `atuel-static-${VERSION}`;
 const PAGES_CACHE = `atuel-pages-${VERSION}`;
 
@@ -17,9 +19,7 @@ self.addEventListener('install', () => {
 self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
     const keys = await caches.keys();
-    await Promise.all(
-      keys.filter((k) => !k.endsWith(VERSION)).map((k) => caches.delete(k)),
-    );
+    await Promise.all(keys.filter((k) => !k.endsWith(VERSION)).map((k) => caches.delete(k)));
     await self.clients.claim();
   })());
 });
@@ -28,22 +28,28 @@ const isStaticAsset = (pathname) =>
   pathname.startsWith('/_next/static/') ||
   /\.(?:js|css|woff2?|png|jpg|jpeg|webp|svg|ico|json)$/.test(pathname);
 
+// Clave de caché que separa las transiciones RSC (App Router) del HTML completo de la misma URL.
+function pageKey(request) {
+  const url = new URL(request.url);
+  const isRsc = request.headers.has('RSC') || request.headers.has('Rsc') || url.searchParams.has('_rsc');
+  url.searchParams.delete('_rsc');
+  if (isRsc) url.searchParams.set('__rsc', '1');
+  return url.toString();
+}
+
 self.addEventListener('fetch', (event) => {
   const { request } = event;
   if (request.method !== 'GET') return;
 
   const url = new URL(request.url);
-  // Solo mismo origen; Supabase y externos van directo a la red.
-  if (url.origin !== self.location.origin) return;
+  if (url.origin !== self.location.origin) return; // Supabase y externos: red directa
 
   if (isStaticAsset(url.pathname)) {
     event.respondWith(cacheFirst(request, STATIC_CACHE));
     return;
   }
 
-  if (request.mode === 'navigate') {
-    event.respondWith(networkFirst(request, PAGES_CACHE));
-  }
+  event.respondWith(networkFirst(request));
 });
 
 async function cacheFirst(request, cacheName) {
@@ -59,16 +65,21 @@ async function cacheFirst(request, cacheName) {
   }
 }
 
-async function networkFirst(request, cacheName) {
-  const cache = await caches.open(cacheName);
+async function networkFirst(request) {
+  const cache = await caches.open(PAGES_CACHE);
+  const key = pageKey(request);
   try {
     const res = await fetch(request);
-    if (res.ok) cache.put(request, res.clone());
+    if (res.ok) cache.put(key, res.clone());
     return res;
   } catch {
-    const cached = await cache.match(request);
+    const cached = await cache.match(key);
     if (cached) return cached;
-    const fallback = (await cache.match('/dashboard')) || (await cache.match('/'));
-    return fallback || Response.error();
+    if (request.mode === 'navigate') {
+      const home = (await cache.match(pageKey(new Request(self.location.origin + '/dashboard'))))
+        || (await cache.match(pageKey(new Request(self.location.origin + '/'))));
+      if (home) return home;
+    }
+    return Response.error();
   }
 }
