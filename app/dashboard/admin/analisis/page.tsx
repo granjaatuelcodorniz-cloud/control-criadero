@@ -14,6 +14,12 @@ type Loss = {
   quantity: number;
 };
 
+// Lote con su fecha de inicio y aves iniciales (para no afectar % anteriores a su carga).
+type LotInicio = {
+  start_date: string;
+  initial_quantity: number;
+};
+
 // Registro enriquecido por día — consumo + fértiles integrados
 type DayFull = {
   date: string;
@@ -45,13 +51,19 @@ function getToday(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-// Calcula cuántas aves había en una fecha dada
-// aves_en_fecha = aves_actuales + bajas_registradas_DESPUÉS_de_esa_fecha
-function avesEnFecha(fecha: string, avesActuales: number, losses: Loss[]): number {
+// Calcula cuántas aves había en una fecha dada:
+//   aves_actuales
+//   + bajas registradas DESPUÉS de esa fecha (estaban vivas ese día)
+//   - aves iniciales de lotes cargados DESPUÉS de esa fecha (todavía no existían)
+// Así un lote nuevo solo afecta los % desde su fecha de carga en adelante, no para atrás.
+function avesEnFecha(fecha: string, avesActuales: number, losses: Loss[], lots: LotInicio[]): number {
   const bajasPosteriores = losses
     .filter(l => l.date > fecha)
     .reduce((s, l) => s + l.quantity, 0);
-  return avesActuales + bajasPosteriores;
+  const avesDeLotesPosteriores = lots
+    .filter(l => l.start_date > fecha)
+    .reduce((s, l) => s + l.initial_quantity, 0);
+  return Math.max(0, avesActuales + bajasPosteriores - avesDeLotesPosteriores);
 }
 
 // Agrupa los empaques de consumo (consumo_empaque) por fecha sumando valores
@@ -94,6 +106,7 @@ function buildDaysFull(
   fertilesMap: Map<string, { docenas: number; descarte: number }>,
   avesActuales: number,
   losses: Loss[],
+  lots: LotInicio[],
 ): DayFull[] {
   const allDates = new Set([...consumoMap.keys(), ...fertilesMap.keys()]);
   const result: DayFull[] = [];
@@ -106,7 +119,7 @@ function buildDaysFull(
     const huevosFertiles = (f.docenas * 12) + f.descarte;
     const huevosTotal = huevosConsumo + huevosFertiles;
 
-    const aves = avesEnFecha(date, avesActuales, losses);
+    const aves = avesEnFecha(date, avesActuales, losses, lots);
     const pctPostura = aves > 0 && huevosTotal > 0
       ? Math.round((huevosTotal / aves) * 100)
       : null;
@@ -205,6 +218,7 @@ export default function Analisis() {
   // Global
   const [avesActuales, setAvesActuales] = useState(0);
   const [allLosses, setAllLosses] = useState<Loss[]>([]);
+  const [allLots, setAllLots] = useState<LotInicio[]>([]);
 
   // Búsqueda por día
   const [searchDate, setSearchDate] = useState(today);
@@ -233,7 +247,7 @@ export default function Analisis() {
   const [loading, setLoading] = useState(false);
 
   // ── Cargar mes ──────────────────────────────────────────────────────────────
-  const loadMonth = useCallback(async (month: string, aves: number, losses: Loss[]) => {
+  const loadMonth = useCallback(async (month: string, aves: number, losses: Loss[], lots: LotInicio[]) => {
     const [year, mon] = month.split('-');
     const from = `${year}-${mon}-01`;
     const lastDay = new Date(Number(year), Number(mon), 0).getDate();
@@ -250,7 +264,7 @@ export default function Analisis() {
 
     const consumoMap = groupConsumo(consumoRes.data || []);
     const fertilesMap = groupFertiles(fertilesRes.data || []);
-    const days = buildDaysFull(consumoMap, fertilesMap, aves, losses);
+    const days = buildDaysFull(consumoMap, fertilesMap, aves, losses, lots);
     setMonthDays(days);
     setMonthLosses(lossesMonthRes.data?.reduce((s, l) => s + l.quantity, 0) || 0);
   }, []);
@@ -262,13 +276,15 @@ export default function Analisis() {
     if (profile.role !== 'owner') { router.push('/dashboard'); return; }
 
     const init = async () => {
-      const [slotsRes, lossesRes] = await Promise.all([
+      const [slotsRes, lossesRes, lotsRes] = await Promise.all([
         supabase.from('cage_slots').select('quantity'),
         supabase.from('lot_losses').select('date, quantity'),
+        supabase.from('lots').select('start_date, initial_quantity').neq('status', 'cerrado'),
       ]);
       const aves = slotsRes.data?.reduce((s, sl) => s + sl.quantity, 0) || 0;
       setAvesActuales(aves);
       setAllLosses(lossesRes.data || []);
+      setAllLots(lotsRes.data || []);
       setBaseDataReady(true);
     };
     void init();
@@ -276,8 +292,8 @@ export default function Analisis() {
 
   useEffect(() => {
     if (!baseDataReady) return;
-    void loadMonth(selectedMonth, avesActuales, allLosses);
-  }, [baseDataReady, selectedMonth, avesActuales, allLosses, loadMonth]);
+    void loadMonth(selectedMonth, avesActuales, allLosses, allLots);
+  }, [baseDataReady, selectedMonth, avesActuales, allLosses, allLots, loadMonth]);
 
   const handleMonthChange = (month: string) => {
     setSelectedMonth(month);
@@ -303,7 +319,7 @@ export default function Analisis() {
       setDayData(null);
       setDayNotes([]);
     } else {
-      const days = buildDaysFull(consumoMap, fertilesMap, avesActuales, allLosses);
+      const days = buildDaysFull(consumoMap, fertilesMap, avesActuales, allLosses, allLots);
       setDayData(days[0] || null);
       setDayNotes(
         (notasRes.data || []).map(r => r.notas).filter((n): n is string => !!n)
@@ -326,7 +342,7 @@ export default function Analisis() {
 
     const consumoMap = groupConsumo(consumoRes.data || []);
     const fertilesMap = groupFertiles(fertilesRes.data || []);
-    const days = buildDaysFull(consumoMap, fertilesMap, avesActuales, allLosses);
+    const days = buildDaysFull(consumoMap, fertilesMap, avesActuales, allLosses, allLots);
     setRangeDays(days);
     setLoading(false);
   };
