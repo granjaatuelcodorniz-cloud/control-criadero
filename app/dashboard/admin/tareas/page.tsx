@@ -5,6 +5,7 @@ import { supabase } from '@/lib/supabase';
 import Header from '@/components/Header';
 import { Plus, X, Trash2, Calendar, Clock, User, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
+import { useVisibilityReload } from '@/lib/visibility-reload';
 import { useRouter } from 'next/navigation';
 import { ConfirmDialog, ToastViewport, useToast } from '@/components/Feedback';
 import { assertSupabaseOk, getErrorMessage } from '@/lib/supabase-ops';
@@ -86,6 +87,8 @@ export default function Tareas() {
     if (profile.role !== 'owner') { router.push('/dashboard'); return; }
     loadData();
   }, [authLoading, user, profile, router, loadData]);
+
+  useVisibilityReload(loadData);
 
   // ── Crear tarea ─────────────────────────────────────────────────────────────
   const handleSave = async () => {

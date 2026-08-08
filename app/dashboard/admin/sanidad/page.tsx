@@ -9,6 +9,7 @@ import {
   FlaskConical, Pencil, SkipForward,
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
+import { useVisibilityReload } from '@/lib/visibility-reload';
 import { useRouter } from 'next/navigation';
 import { ConfirmDialog, ToastViewport, useToast } from '@/components/Feedback';
 import { assertSupabaseOk, getErrorMessage } from '@/lib/supabase-ops';
@@ -246,6 +247,8 @@ export default function Sanidad() {
     if (profile.role !== 'owner') { router.push('/dashboard'); return; }
     loadData();
   }, [authLoading, user, profile, router, loadData]);
+
+  useVisibilityReload(loadData);
 
   // ── Calculadora de dosis ────────────────────────────────────────────────────
   useEffect(() => {

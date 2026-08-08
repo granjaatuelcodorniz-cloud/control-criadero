@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
+import { useVisibilityReload } from '@/lib/visibility-reload';
 import { useRouter } from 'next/navigation';
 import Header from '@/components/Header';
 import {
@@ -265,6 +266,8 @@ export default function Actividad() {
     if (profile.role !== 'owner') { router.push('/dashboard'); return; }
     loadData();
   }, [authLoading, user, profile, router, loadData]);
+
+  useVisibilityReload(loadData);
 
   if (authLoading) return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center">

@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
+import { useVisibilityReload } from '@/lib/visibility-reload';
 import Header from '@/components/Header';
 import { useRouter } from 'next/navigation';
 import { ToastViewport, useToast } from '@/components/Feedback';
@@ -425,6 +426,8 @@ export default function LotesColaboradora() {
     if (profile.role === 'owner') { router.push('/dashboard/admin'); return; }
     loadData();
   }, [authLoading, user, profile, router, loadData]);
+
+  useVisibilityReload(loadData);
 
   // Palanca del owner: habilita cargar/ampliar lotes para la colaboradora.
   useEffect(() => {

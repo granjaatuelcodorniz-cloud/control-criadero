@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
+import { useVisibilityReload } from '@/lib/visibility-reload';
 import { useRouter } from 'next/navigation';
 import Header from '@/components/Header';
 import BajaRapida from '@/components/BajaRapida';
@@ -155,12 +156,9 @@ export default function AdminDashboard() {
     if (!user || !profile) { router.push('/'); return; }
     if (profile.role !== 'owner') { router.push('/dashboard'); return; }
     load();
-    const handleVisible = () => {
-      if (document.visibilityState === 'visible') load();
-    };
-    document.addEventListener('visibilitychange', handleVisible);
-    return () => document.removeEventListener('visibilitychange', handleVisible);
   }, [authLoading, user, profile, router, load]);
+
+  useVisibilityReload(load);
 
   // ── Procesar bandeja fértil ─────────────────────────────────────────────────
   const handleProcessBatch = async (batch: FertileBatch) => {

@@ -8,6 +8,7 @@ import {
   AlertCircle, ArrowLeftRight, Archive,
 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
+import { useVisibilityReload } from '@/lib/visibility-reload';
 import { useRouter } from 'next/navigation';
 import { ToastViewport, useToast } from '@/components/Feedback';
 import { assertSupabaseAllOk, assertSupabaseOk, getErrorMessage } from '@/lib/supabase-ops';
@@ -572,6 +573,8 @@ export default function Lotes() {
     if (profile.role !== 'owner') { router.push('/dashboard'); return; }
     loadData();
   }, [authLoading, user, profile, router, loadData]);
+
+  useVisibilityReload(loadData);
 
   // Palanca: ¿la colaboradora puede cargar/ampliar lotes?
   useEffect(() => {

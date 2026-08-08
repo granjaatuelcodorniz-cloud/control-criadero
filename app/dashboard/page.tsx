@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
+import { useVisibilityReload } from '@/lib/visibility-reload';
 import Header from '@/components/Header';
 import BajaRapida from '@/components/BajaRapida';
 import Link from 'next/link';
@@ -230,6 +231,8 @@ export default function Dashboard() {
     if (profile.role === 'owner') { router.push('/dashboard/admin'); return; }
     loadData();
   }, [authLoading, user, profile, router, loadData]);
+
+  useVisibilityReload(loadData);
 
   // ── Toggle tarea ────────────────────────────────────────────────────────────
   const toggleTask = async (task: Task) => {

@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
+import { useVisibilityReload } from '@/lib/visibility-reload';
 import { useRouter } from 'next/navigation';
 import Header from '@/components/Header';
 import { Search, Calendar, TrendingUp, Skull } from 'lucide-react';
@@ -270,25 +271,31 @@ export default function Analisis() {
   }, []);
 
   // ── Init ────────────────────────────────────────────────────────────────────
+  // Carga los datos base (aves actuales, bajas, lotes). Se ejecuta al entrar y
+  // también al volver de segundo plano, para no quedar con datos viejos.
+  const loadBase = useCallback(async () => {
+    const [slotsRes, lossesRes, lotsRes] = await Promise.all([
+      supabase.from('cage_slots').select('quantity'),
+      supabase.from('lot_losses').select('date, quantity'),
+      supabase.from('lots').select('start_date, initial_quantity').neq('status', 'cerrado'),
+    ]);
+    const aves = slotsRes.data?.reduce((s, sl) => s + sl.quantity, 0) || 0;
+    setAvesActuales(aves);
+    setAllLosses(lossesRes.data || []);
+    setAllLots(lotsRes.data || []);
+    setBaseDataReady(true);
+  }, []);
+
   useEffect(() => {
     if (authLoading) return;
     if (!user || !profile) { router.push('/'); return; }
     if (profile.role !== 'owner') { router.push('/dashboard'); return; }
+    void loadBase();
+  }, [authLoading, user, profile, router, loadBase]);
 
-    const init = async () => {
-      const [slotsRes, lossesRes, lotsRes] = await Promise.all([
-        supabase.from('cage_slots').select('quantity'),
-        supabase.from('lot_losses').select('date, quantity'),
-        supabase.from('lots').select('start_date, initial_quantity').neq('status', 'cerrado'),
-      ]);
-      const aves = slotsRes.data?.reduce((s, sl) => s + sl.quantity, 0) || 0;
-      setAvesActuales(aves);
-      setAllLosses(lossesRes.data || []);
-      setAllLots(lotsRes.data || []);
-      setBaseDataReady(true);
-    };
-    void init();
-  }, [authLoading, user, profile, router]);
+  // Al volver a primer plano, refrescamos los datos base; eso reengancha el
+  // efecto de abajo y recarga el mes visible (el bug del video).
+  useVisibilityReload(loadBase);
 
   useEffect(() => {
     if (!baseDataReady) return;

@@ -5,6 +5,7 @@ import { supabase } from '@/lib/supabase';
 import Header from '@/components/Header';
 import { ChevronDown, AlertCircle, AlertTriangle, Egg, PackageCheck } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
+import { useVisibilityReload } from '@/lib/visibility-reload';
 import { useRouter } from 'next/navigation';
 import { ToastViewport, useToast } from '@/components/Feedback';
 import { assertSupabaseOk, getErrorMessage } from '@/lib/supabase-ops';
@@ -385,6 +386,18 @@ export default function RegistroHuevos() {
     }
     setDiasPendientes(pend);
   }, [user]);
+
+  // Al volver de segundo plano, refresca lo que está visible en la pestaña actual.
+  const reloadActive = useCallback(() => {
+    if (!user) return;
+    void loadAves();
+    void checkExistingRec(dateRec);
+    if (activeTab === 'recoleccion') void loadPendientes();
+    else if (activeTab === 'empaque') void loadConsumoDays();
+    else if (activeTab === 'fertiles') void loadPendingBatches();
+  }, [user, activeTab, dateRec, loadAves, checkExistingRec, loadPendientes, loadConsumoDays, loadPendingBatches]);
+
+  useVisibilityReload(reloadActive);
 
   useEffect(() => {
     if (!authLoading && !user) router.push('/');
