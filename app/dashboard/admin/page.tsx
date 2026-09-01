@@ -36,6 +36,15 @@ type Alert = { type: 'danger' | 'warning' | 'ok'; message: string };
 type FertileBatch = { id: number; date: string; status: string; docenas_seleccionadas: number | null; descarte: number | null };
 type CageSlot = { id: number; lot_id: number; slot_code: string; quantity: number };
 type Lot = { id: number; code: string; current_quantity: number };
+type StockItem = {
+  id: number;
+  name: string;
+  unit: string | null;
+  current_quantity: number;
+  alert_threshold: number;
+  is_feed: boolean;
+};
+type StockMovement = { stock_item_id: number; quantity: number };
 
 export default function AdminDashboard() {
   const { user, profile, loading: authLoading } = useAuth();
@@ -62,17 +71,21 @@ export default function AdminDashboard() {
       const sevenDaysAgo = new Date();
       sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
 
-      const [weekRes, empRes, fertileRes, slotsRes, lotsRes, stockRes, tasksRes, healthRes, batchesRes] = await Promise.all([
-        supabase.from('daily_records').select('date, registered_at, bandejas_consumo, bandejas_fertiles, notas').gte('date', toDateStr(sevenDaysAgo)).order('date'),
-        supabase.from('consumo_empaque').select('date, bandejas, docenas, rotos').gte('date', toDateStr(sevenDaysAgo)),
+      const sevenDaysAgoStr = toDateStr(sevenDaysAgo);
+
+      const [weekRes, empRes, fertileRes, slotsRes, lotsRes, stockRes, tasksRes, healthRes, batchesRes, weekFeedRes] = await Promise.all([
+        supabase.from('daily_records').select('date, registered_at, bandejas_consumo, bandejas_fertiles, notas').gte('date', sevenDaysAgoStr).order('date'),
+        supabase.from('consumo_empaque').select('date, bandejas, docenas, rotos').gte('date', sevenDaysAgoStr),
         supabase.from('fertile_records').select('*').eq('date', today).order('created_at', { ascending: false }).limit(1),
         supabase.from('cage_slots').select('id, lot_id, slot_code, quantity'),
         supabase.from('lots').select('id, code, current_quantity').eq('status', 'activo'),
-        supabase.from('stock_items').select('name, unit, current_quantity, alert_threshold'),
+        supabase.from('stock_items').select('id, name, unit, current_quantity, alert_threshold, is_feed'),
         supabase.from('tasks').select('description').eq('is_urgent', true).eq('is_active', true),
         // Alertas de sanidad: próximas aplicaciones vencidas
         supabase.from('health_records').select('type, next_application').not('next_application', 'is', null),
         supabase.from('fertile_batches').select('*').eq('status', 'pendiente').order('date'),
+        supabase.from('stock_movements').select('stock_item_id, quantity')
+          .eq('movement_type', 'salida').gte('date', sevenDaysAgoStr).lte('date', today),
       ]);
 
       if (fertileRes.data?.[0]) setTodayFertile(fertileRes.data[0]);
@@ -115,7 +128,8 @@ export default function AdminDashboard() {
 
       // Alertas de stock
       if (stockRes.data) {
-        stockRes.data.forEach(item => {
+        const stockItems = stockRes.data as StockItem[];
+        stockItems.forEach(item => {
           if (item.current_quantity <= item.alert_threshold) {
             newAlerts.push({
               type: item.current_quantity === 0 ? 'danger' : 'warning',
@@ -123,6 +137,22 @@ export default function AdminDashboard() {
             });
           }
         });
+
+        const feedItems = stockItems.filter(item => item.is_feed);
+        const feedIds = new Set(feedItems.map(item => item.id));
+        const weeklyFeedKg = ((weekFeedRes.data || []) as StockMovement[])
+          .filter(m => feedIds.has(m.stock_item_id))
+          .reduce((s, m) => s + (m.quantity ?? 0), 0);
+        const dailyFeedKg = weeklyFeedKg / 7;
+        const feedStockKg = feedItems.reduce((s, item) => s + (item.current_quantity ?? 0), 0);
+        const estimatedDays = dailyFeedKg > 0 ? Math.floor(feedStockKg / dailyFeedKg) : null;
+
+        if (estimatedDays !== null && estimatedDays <= 10) {
+          newAlerts.push({
+            type: estimatedDays <= 3 ? 'danger' : 'warning',
+            message: `Alimento estimado para ${estimatedDays} día${estimatedDays !== 1 ? 's' : ''}`,
+          });
+        }
       }
 
       // Alertas de tareas urgentes

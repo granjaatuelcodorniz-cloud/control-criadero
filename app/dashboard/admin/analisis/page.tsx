@@ -6,7 +6,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useVisibilityReload } from '@/lib/visibility-reload';
 import { useRouter } from 'next/navigation';
 import Header from '@/components/Header';
-import { Search, Calendar, TrendingUp, Skull } from 'lucide-react';
+import { Search, Calendar, TrendingUp, Skull, Wheat } from 'lucide-react';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -19,6 +19,20 @@ type Loss = {
 type LotInicio = {
   start_date: string;
   initial_quantity: number;
+};
+
+type FeedItem = {
+  id: number;
+  name: string;
+  current_quantity: number;
+  kg_por_bolsa: number | null;
+  bolsas_restantes: number | null;
+};
+
+type FeedMovement = {
+  date: string;
+  quantity: number;
+  stock_item_id: number;
 };
 
 // Registro enriquecido por día — consumo + fértiles integrados
@@ -50,6 +64,34 @@ function dayLabel(dateStr: string): string {
 function getToday(): string {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function addDays(dateStr: string, n: number): string {
+  const d = new Date(dateStr + 'T12:00:00');
+  d.setDate(d.getDate() + n);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function daysBetweenInclusive(from: string, to: string): number {
+  const start = new Date(from + 'T12:00:00');
+  const end = new Date(to + 'T12:00:00');
+  return Math.max(1, Math.floor((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1);
+}
+
+function sumFeedKg(movements: FeedMovement[], feedItemIds: Set<number>): number {
+  return Math.round(
+    movements
+      .filter(m => feedItemIds.has(m.stock_item_id))
+      .reduce((s, m) => s + (m.quantity ?? 0), 0) * 100
+  ) / 100;
+}
+
+function formatKg(value: number): string {
+  return value.toLocaleString('es-AR', { maximumFractionDigits: 1 });
+}
+
+function formatDecimal(value: number): string {
+  return value.toLocaleString('es-AR', { maximumFractionDigits: 2 });
 }
 
 // Calcula cuántas aves había en una fecha dada:
@@ -220,6 +262,8 @@ export default function Analisis() {
   const [avesActuales, setAvesActuales] = useState(0);
   const [allLosses, setAllLosses] = useState<Loss[]>([]);
   const [allLots, setAllLots] = useState<LotInicio[]>([]);
+  const [feedItems, setFeedItems] = useState<FeedItem[]>([]);
+  const [weekFeedKg, setWeekFeedKg] = useState(0);
 
   // Búsqueda por día
   const [searchDate, setSearchDate] = useState(today);
@@ -235,6 +279,7 @@ export default function Analisis() {
   const [dateTo, setDateTo] = useState(today);
   const [rangeDays, setRangeDays] = useState<DayFull[]>([]);
   const [rangeSearched, setRangeSearched] = useState(false);
+  const [rangeFeedKg, setRangeFeedKg] = useState(0);
 
   // Mes
   const [selectedMonth, setSelectedMonth] = useState(() => {
@@ -243,6 +288,7 @@ export default function Analisis() {
   });
   const [monthDays, setMonthDays] = useState<DayFull[]>([]);
   const [monthLosses, setMonthLosses] = useState(0);
+  const [monthFeedKg, setMonthFeedKg] = useState(0);
   const [baseDataReady, setBaseDataReady] = useState(false);
 
   const [loading, setLoading] = useState(false);
@@ -254,37 +300,50 @@ export default function Analisis() {
     const lastDay = new Date(Number(year), Number(mon), 0).getDate();
     const to = `${year}-${mon}-${String(lastDay).padStart(2, '0')}`;
 
-    const [consumoRes, fertilesRes, lossesMonthRes] = await Promise.all([
+    const [consumoRes, fertilesRes, lossesMonthRes, feedMovRes] = await Promise.all([
       supabase.from('consumo_empaque').select('date, docenas, rotos')
         .gte('date', from).lte('date', to),
       supabase.from('fertile_records').select('date, docenas_seleccionadas, descarte')
         .gte('date', from).lte('date', to),
       supabase.from('lot_losses').select('quantity').eq('loss_type', 'muerte')
         .gte('date', from).lte('date', to),
+      supabase.from('stock_movements').select('date, quantity, stock_item_id')
+        .eq('movement_type', 'salida').gte('date', from).lte('date', to),
     ]);
 
     const consumoMap = groupConsumo(consumoRes.data || []);
     const fertilesMap = groupFertiles(fertilesRes.data || []);
     const days = buildDaysFull(consumoMap, fertilesMap, aves, losses, lots);
+    const feedItemIds = new Set(feedItems.map(item => item.id));
     setMonthDays(days);
     setMonthLosses(lossesMonthRes.data?.reduce((s, l) => s + l.quantity, 0) || 0);
-  }, []);
+    setMonthFeedKg(sumFeedKg(feedMovRes.data || [], feedItemIds));
+  }, [feedItems]);
 
   // ── Init ────────────────────────────────────────────────────────────────────
   // Carga los datos base (aves actuales, bajas, lotes). Se ejecuta al entrar y
   // también al volver de segundo plano, para no quedar con datos viejos.
   const loadBase = useCallback(async () => {
-    const [slotsRes, lossesRes, lotsRes] = await Promise.all([
+    const weekFrom = addDays(today, -6);
+    const [slotsRes, lossesRes, lotsRes, feedItemsRes, weekFeedRes] = await Promise.all([
       supabase.from('cage_slots').select('quantity'),
       supabase.from('lot_losses').select('date, quantity'),
       supabase.from('lots').select('start_date, initial_quantity').neq('status', 'cerrado'),
+      supabase.from('stock_items').select('id, name, current_quantity, kg_por_bolsa, bolsas_restantes')
+        .eq('is_feed', true).order('name'),
+      supabase.from('stock_movements').select('date, quantity, stock_item_id')
+        .eq('movement_type', 'salida').gte('date', weekFrom).lte('date', today),
     ]);
     const aves = slotsRes.data?.reduce((s, sl) => s + sl.quantity, 0) || 0;
+    const feedData = feedItemsRes.data || [];
+    const feedItemIds = new Set(feedData.map(item => item.id));
     setAvesActuales(aves);
     setAllLosses(lossesRes.data || []);
     setAllLots(lotsRes.data || []);
+    setFeedItems(feedData);
+    setWeekFeedKg(sumFeedKg(weekFeedRes.data || [], feedItemIds));
     setBaseDataReady(true);
-  }, []);
+  }, [today]);
 
   useEffect(() => {
     if (authLoading) return;
@@ -340,17 +399,21 @@ export default function Analisis() {
     setLoading(true);
     setRangeSearched(true);
 
-    const [consumoRes, fertilesRes] = await Promise.all([
+    const [consumoRes, fertilesRes, feedMovRes] = await Promise.all([
       supabase.from('consumo_empaque').select('date, docenas, rotos')
         .gte('date', dateFrom).lte('date', dateTo),
       supabase.from('fertile_records').select('date, docenas_seleccionadas, descarte')
         .gte('date', dateFrom).lte('date', dateTo),
+      supabase.from('stock_movements').select('date, quantity, stock_item_id')
+        .eq('movement_type', 'salida').gte('date', dateFrom).lte('date', dateTo),
     ]);
 
     const consumoMap = groupConsumo(consumoRes.data || []);
     const fertilesMap = groupFertiles(fertilesRes.data || []);
     const days = buildDaysFull(consumoMap, fertilesMap, avesActuales, allLosses, allLots);
+    const feedItemIds = new Set(feedItems.map(item => item.id));
     setRangeDays(days);
+    setRangeFeedKg(sumFeedKg(feedMovRes.data || [], feedItemIds));
     setLoading(false);
   };
 
@@ -362,12 +425,29 @@ export default function Analisis() {
   const monthPromPostura = avgPct(monthDays, 'pctPostura');
   const monthPromRotos = avgPct(monthDays, 'pctRotos');
   const monthDiasConReg = monthDays.length;
+  const [monthYear, monthNumber] = selectedMonth.split('-').map(Number);
+  const monthStart = `${selectedMonth}-01`;
+  const monthLastDay = new Date(monthYear, monthNumber, 0).getDate();
+  const monthEnd = selectedMonth === today.slice(0, 7)
+    ? today
+    : `${selectedMonth}-${String(monthLastDay).padStart(2, '0')}`;
+  const monthPeriodDays = daysBetweenInclusive(monthStart, monthEnd);
+  const monthFeedKgPerDay = monthFeedKg / monthPeriodDays;
+  const monthFeedKgPerBirdDay = avesActuales > 0 ? monthFeedKgPerDay / avesActuales : 0;
 
   // ── Cálculos rango ──────────────────────────────────────────────────────────
   const rangeTotalHuevos = rangeDays.reduce((s, d) => s + d.huevosTotal, 0);
   const rangeTotalDocenas = rangeDays.reduce((s, d) => s + d.docenas, 0);
   const rangePromPostura = avgPct(rangeDays, 'pctPostura');
   const rangePromDocenas = rangeDays.length > 0 ? Math.round(rangeTotalDocenas / rangeDays.length) : 0;
+  const rangePeriodDays = daysBetweenInclusive(dateFrom, dateTo);
+  const rangeFeedKgPerDay = rangeFeedKg / rangePeriodDays;
+  const rangeFeedKgPerBirdDay = avesActuales > 0 ? rangeFeedKgPerDay / avesActuales : 0;
+
+  const totalFeedStockKg = feedItems.reduce((s, item) => s + (item.current_quantity ?? 0), 0);
+  const weekFeedKgPerDay = weekFeedKg / 7;
+  const weekFeedKgPerBirdDay = avesActuales > 0 ? weekFeedKgPerDay / avesActuales : 0;
+  const estimatedStockDays = weekFeedKgPerDay > 0 ? Math.floor(totalFeedStockKg / weekFeedKgPerDay) : null;
 
   const monthOptions = Array.from({ length: 12 }, (_, i) => {
     const d = new Date(); d.setMonth(d.getMonth() - i);
@@ -391,6 +471,47 @@ export default function Analisis() {
 
       <div className="max-w-2xl mx-auto px-4 py-6 space-y-6">
         <h2 className="text-2xl font-bold text-gray-900">Análisis de Producción</h2>
+
+        {/* ── Alimento ── */}
+        <section>
+          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Alimento</h3>
+          <div className="bg-white rounded-2xl border border-gray-100 p-4 space-y-4">
+            <div className="bg-emerald-50 rounded-2xl p-4 flex items-center justify-between border border-emerald-100">
+              <div>
+                <p className="text-sm font-bold text-emerald-800 flex items-center gap-1">
+                  <Wheat className="w-4 h-4" /> Stock estimado
+                </p>
+                <p className="text-xs text-emerald-700 mt-0.5">
+                  {formatKg(totalFeedStockKg)} kg disponibles
+                </p>
+              </div>
+              <p className="text-4xl font-black text-emerald-800">
+                {estimatedStockDays !== null ? estimatedStockDays : '—'}
+                <span className="text-sm ml-1">días</span>
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <StatCard label="Últimos 7 días" value={`${formatKg(weekFeedKg)} kg`} />
+              <StatCard label="Promedio diario" value={`${formatKg(weekFeedKgPerDay)} kg`} />
+              <StatCard label="Kg/ave/día" value={weekFeedKgPerBirdDay > 0 ? formatDecimal(weekFeedKgPerBirdDay) : '—'} />
+              <StatCard label="Bolsas cerradas" value={feedItems.reduce((s, item) => s + (item.bolsas_restantes ?? 0), 0)} />
+            </div>
+
+            {feedItems.length > 1 && (
+              <div className="pt-2 border-t border-gray-50 space-y-2">
+                {feedItems.map(item => (
+                  <div key={item.id} className="flex items-center justify-between text-sm">
+                    <span className="font-medium text-gray-600">{item.name}</span>
+                    <span className="text-gray-400">
+                      {item.bolsas_restantes ?? 0} bolsas · {formatKg(item.current_quantity)} kg
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </section>
 
         {/* ── Búsqueda por día ── */}
         <section>
@@ -490,9 +611,9 @@ export default function Analisis() {
             </button>
 
             {rangeSearched && (
-              rangeDays.length > 0 ? (
+              rangeDays.length > 0 || rangeFeedKg > 0 ? (
                 <div className="space-y-4">
-                  <BarChart days={rangeDays} today={today} />
+                  {rangeDays.length > 0 && <BarChart days={rangeDays} today={today} />}
 
                   {rangePromPostura !== null && (
                     <div className="bg-yellow-400 rounded-2xl p-3 flex items-center justify-between">
@@ -506,6 +627,9 @@ export default function Analisis() {
                     <StatCard label="Total huevos" value={rangeTotalHuevos} />
                     <StatCard label="Promedio docenas/día" value={rangePromDocenas} />
                     <StatCard label="Días con registro" value={rangeDays.length} />
+                    <StatCard label="Alimento consumido" value={`${formatKg(rangeFeedKg)} kg`} />
+                    <StatCard label="Kg/ave/día" value={rangeFeedKgPerBirdDay > 0 ? formatDecimal(rangeFeedKgPerBirdDay) : '—'}
+                      sub={`${formatKg(rangeFeedKgPerDay)} kg/día`} />
                   </div>
                 </div>
               ) : (
@@ -524,9 +648,9 @@ export default function Analisis() {
               {monthOptions.map(m => <option key={m.val} value={m.val}>{m.label}</option>)}
             </select>
 
-            {monthDays.length > 0 ? (
+            {monthDays.length > 0 || monthFeedKg > 0 ? (
               <div className="space-y-4">
-                <BarChart days={monthDays} today={today} />
+                {monthDays.length > 0 && <BarChart days={monthDays} today={today} />}
 
                 {/* Postura promedio destacada */}
                 {monthPromPostura !== null && (
@@ -551,6 +675,9 @@ export default function Analisis() {
                     <StatCard label="Total huevos" value={monthTotalHuevos} />
                     <StatCard label="Promedio docenas/día" value={monthDiasConReg > 0 ? Math.round(monthTotalDocenas / monthDiasConReg) : 0} />
                     <StatCard label="Días con registro" value={monthDiasConReg} />
+                    <StatCard label="Alimento consumido" value={`${formatKg(monthFeedKg)} kg`} />
+                    <StatCard label="Kg/ave/día" value={monthFeedKgPerBirdDay > 0 ? formatDecimal(monthFeedKgPerBirdDay) : '—'}
+                      sub={`${formatKg(monthFeedKgPerDay)} kg/día`} />
                   </div>
                 </div>
 

@@ -8,7 +8,7 @@ import { useRouter } from 'next/navigation';
 import Header from '@/components/Header';
 import {
   Plus, X, Pencil, History, ArrowDownCircle, ArrowUpCircle,
-  ClipboardList, Package, AlertTriangle, Check,
+  ClipboardList, Package, AlertTriangle, Check, ClipboardCheck,
 } from 'lucide-react';
 import { ToastViewport, useToast } from '@/components/Feedback';
 import { assertSupabaseAllOk, assertSupabaseOk, getErrorMessage } from '@/lib/supabase-ops';
@@ -187,6 +187,9 @@ export default function Stock() {
   const [feedKg, setFeedKg] = useState('');
   const [feedBolsas, setFeedBolsas] = useState('');
   const [feedDate, setFeedDate] = useState(new Date().toISOString().split('T')[0]);
+  const [showCountForm, setShowCountForm] = useState<number | null>(null);
+  const [countBolsas, setCountBolsas] = useState('');
+  const [countDate, setCountDate] = useState(new Date().toISOString().split('T')[0]);
 
   const [filterItemId, setFilterItemId] = useState<number | 'all'>('all');
 
@@ -258,12 +261,15 @@ export default function Stock() {
     try {
       const totalKg = Number(feedKg);
       const numBolsas = Number(feedBolsas);
-      const kgPorBolsa = Math.round((totalKg / numBolsas) * 100) / 100;
+      if (totalKg <= 0 || numBolsas <= 0) return;
+      const bolsasActualizadas = (feedItem.bolsas_restantes ?? 0) + numBolsas;
+      const kgActualizados = feedItem.current_quantity + totalKg;
+      const kgPorBolsa = Math.round((kgActualizados / bolsasActualizadas) * 100) / 100;
       const results = await Promise.all([
         supabase.from('stock_items').update({
-          current_quantity: feedItem.current_quantity + totalKg,
+          current_quantity: kgActualizados,
           kg_por_bolsa: kgPorBolsa,
-          bolsas_restantes: (feedItem.bolsas_restantes ?? 0) + numBolsas,
+          bolsas_restantes: bolsasActualizadas,
         }).eq('id', feedItem.id),
         supabase.from('stock_movements').insert({
           stock_item_id: feedItem.id,
@@ -282,6 +288,58 @@ export default function Stock() {
       await loadData();
     } catch (error) {
       showToast(getErrorMessage(error, 'No se pudo registrar la entrega.'), 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // ── Alimento: conteo físico ─────────────────────────────────────────────────
+  const handlePhysicalCount = async (feedItemId: number) => {
+    if (!countBolsas || !user) return;
+    const feedItem = items.find(i => i.id === feedItemId);
+    if (!feedItem?.kg_por_bolsa) {
+      showToast('Primero registrá una entrega para tener peso por bolsa.', 'error');
+      return;
+    }
+
+    const countedBolsas = Number(countBolsas);
+    if (!Number.isInteger(countedBolsas) || countedBolsas < 0) {
+      showToast('El conteo debe ser un número entero de bolsas.', 'error');
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const previousBolsas = feedItem.bolsas_restantes ?? 0;
+      const previousKg = feedItem.current_quantity;
+      const countedKg = Math.round(countedBolsas * feedItem.kg_por_bolsa * 100) / 100;
+      const kgDiff = Math.round((countedKg - previousKg) * 100) / 100;
+      const bagDiff = countedBolsas - previousBolsas;
+
+      assertSupabaseOk(await supabase.from('stock_items').update({
+        current_quantity: countedKg,
+        bolsas_restantes: countedBolsas,
+      }).eq('id', feedItem.id));
+
+      if (kgDiff !== 0) {
+        const movementType = kgDiff > 0 ? 'entrada' : 'salida';
+        const sign = bagDiff > 0 ? '+' : '';
+        assertSupabaseOk(await supabase.from('stock_movements').insert({
+          stock_item_id: feedItem.id,
+          quantity: Math.abs(kgDiff),
+          movement_type: movementType,
+          notes: `Ajuste por conteo físico: ${previousBolsas} → ${countedBolsas} bolsas (${sign}${bagDiff})`,
+          user_id: user.id,
+          date: countDate,
+        }));
+      }
+
+      setCountBolsas('');
+      setShowCountForm(null);
+      flash(kgDiff < 0 ? 'Conteo ajustado como consumo' : 'Conteo físico guardado');
+      await loadData();
+    } catch (error) {
+      showToast(getErrorMessage(error, 'No se pudo guardar el conteo físico.'), 'error');
     } finally {
       setSaving(false);
     }
@@ -395,6 +453,9 @@ export default function Stock() {
 
           {feedItems.map(item => {
             const isLow = item.current_quantity <= item.alert_threshold;
+            const countedPreview = countBolsas && showCountForm === item.id && item.kg_por_bolsa
+              ? Number(countBolsas) - (item.bolsas_restantes ?? 0)
+              : null;
             return (
               <div key={item.id} className={`rounded-3xl border-2 p-5 transition-all
                 ${isLow ? 'bg-orange-50 border-orange-200' : 'bg-white border-white shadow-sm'}`}>
@@ -436,12 +497,30 @@ export default function Stock() {
                     ABRIR BOLSA
                   </button>
                   <button
-                    onClick={() => setShowFeedForm(showFeedForm === item.id ? null : item.id)}
+                    onClick={() => {
+                      setShowFeedForm(showFeedForm === item.id ? null : item.id);
+                      setShowCountForm(null);
+                      setCountBolsas('');
+                    }}
                     className="flex-1 py-4 bg-gray-900 text-white rounded-2xl font-bold text-sm transition-all active:scale-95"
                   >
                     {showFeedForm === item.id ? 'CERRAR' : 'RECIBIR'}
                   </button>
                 </div>
+
+                <button
+                  onClick={() => {
+                    const opening = showCountForm !== item.id;
+                    setShowCountForm(opening ? item.id : null);
+                    setShowFeedForm(null);
+                    setCountBolsas(opening ? String(item.bolsas_restantes ?? 0) : '');
+                  }}
+                  disabled={saving || !item.kg_por_bolsa}
+                  className="mt-2 w-full py-3 rounded-2xl border-2 border-dashed border-gray-200 text-gray-500 hover:border-emerald-300 hover:text-emerald-600 disabled:opacity-40 text-xs font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2"
+                >
+                  <ClipboardCheck className="w-4 h-4" />
+                  {showCountForm === item.id ? 'Cerrar conteo' : 'Conteo físico'}
+                </button>
 
                 {showFeedForm === item.id && (
                   <div className="mt-5 pt-5 border-t border-orange-100 space-y-4">
@@ -472,6 +551,42 @@ export default function Stock() {
                     <button onClick={() => handleFeedDelivery(item.id)} disabled={saving || !feedKg || !feedBolsas}
                       className="btn-primary w-full py-4 rounded-2xl disabled:opacity-40">
                       {saving ? 'Procesando...' : 'Confirmar Ingreso'}
+                    </button>
+                  </div>
+                )}
+
+                {showCountForm === item.id && (
+                  <div className="mt-5 pt-5 border-t border-emerald-100 space-y-4">
+                    <div>
+                      <label className="text-[10px] font-black text-gray-400 uppercase ml-1">Bolsas cerradas reales</label>
+                      <input type="number" min={0} step={1} className="input-base mt-1" placeholder="Ej: 18"
+                        value={countBolsas} onChange={e => setCountBolsas(e.target.value)} />
+                    </div>
+
+                    {countedPreview !== null && Number.isInteger(Number(countBolsas)) && (
+                      <div className={`rounded-2xl px-4 py-2 text-sm font-medium border
+                        ${countedPreview < 0
+                          ? 'bg-orange-50 border-orange-100 text-orange-700'
+                          : countedPreview > 0
+                            ? 'bg-emerald-50 border-emerald-100 text-emerald-700'
+                            : 'bg-gray-50 border-gray-100 text-gray-500'}`}>
+                        {countedPreview === 0
+                          ? 'Coincide con el stock actual'
+                          : countedPreview < 0
+                            ? `Faltan ${Math.abs(countedPreview)} bolsa${Math.abs(countedPreview) !== 1 ? 's' : ''}; se registra como consumo`
+                            : `Sobran ${countedPreview} bolsa${countedPreview !== 1 ? 's' : ''}; se registra como ajuste de entrada`}
+                      </div>
+                    )}
+
+                    <div>
+                      <label className="text-[10px] font-black text-gray-400 uppercase ml-1">Fecha conteo</label>
+                      <input type="date" className="input-base mt-1"
+                        value={countDate} onChange={e => setCountDate(e.target.value)} />
+                    </div>
+
+                    <button onClick={() => handlePhysicalCount(item.id)} disabled={saving || !countBolsas}
+                      className="w-full py-4 rounded-2xl bg-emerald-500 hover:bg-emerald-600 text-white font-black disabled:opacity-40 transition-colors">
+                      {saving ? 'Guardando...' : 'Confirmar Conteo'}
                     </button>
                   </div>
                 )}
