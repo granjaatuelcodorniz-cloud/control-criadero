@@ -53,7 +53,7 @@ function isProductionFeed(item: StockItem): boolean {
     .replace(/[\u0300-\u036f]/g, '');
 
   if (/\b(bb|bebe|baby|iniciador|recria|cria)\b/.test(name)) return false;
-  return /\b(ponedora|postura|adulto|adultas|produccion)\b/.test(name);
+  return true;
 }
 
 export default function AdminDashboard() {

@@ -97,7 +97,7 @@ function getFeedCategory(item: FeedItem): FeedCategory {
 
   if (/\b(bb|bebe|baby|iniciador|recria|cria)\b/.test(name)) return 'bb';
   if (/\b(ponedora|postura|adulto|adultas|produccion)\b/.test(name)) return 'produccion';
-  return 'otro';
+  return 'produccion';
 }
 
 function formatKg(value: number): string {

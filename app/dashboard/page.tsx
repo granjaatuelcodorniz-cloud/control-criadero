@@ -73,6 +73,14 @@ function getTreatmentDay(treatment: ActiveTreatment, today: string): number | nu
   return diff + 1;
 }
 
+function isSunday(date: string): boolean {
+  return new Date(date + 'T12:00:00').getDay() === 0;
+}
+
+function isEggWorkflowTask(task: Task): boolean {
+  return /huevo|recolecci[oó]n|recolectar|empacar|empaque/i.test(task.description);
+}
+
 function tipoColor(t: string) {
   switch (t) {
     case 'Antibiótico': return 'bg-red-100 text-red-700 border-red-200';
@@ -84,7 +92,7 @@ function tipoColor(t: string) {
   }
 }
 
-// Anillo de progreso del día (tareas diarias + huevos).
+// Anillo de progreso del día.
 function ProgressRing({ done, total }: { done: number; total: number }) {
   const r = 27;
   const circ = 2 * Math.PI * r;
@@ -133,10 +141,12 @@ export default function Dashboard() {
   const [confirmingTreatment, setConfirmingTreatment] = useState<number | null>(null);
 
   const [today, setToday] = useState(getToday);
+  const [now, setNow] = useState(() => new Date());
 
   // Detectar cambio de día — recarga si la app quedó abierta de un día al otro
   useEffect(() => {
     const interval = setInterval(() => {
+      setNow(new Date());
       const newToday = getToday();
       if (newToday !== today) setToday(newToday);
     }, 60000);
@@ -336,20 +346,34 @@ export default function Dashboard() {
 
   if (!profile) return null;
 
-  // Sección "Tareas de hoy" = diarias + cargar huevos.
-  const dailyDone = dailyTasks.filter(t => completedIds.includes(t.id)).length;
-  const hoyHechas = dailyDone + (recoleccionHoy ? 1 : 0);
-  const hoyTotal = dailyTasks.length + 1;
-  // Progreso del día (anillo): todo lo pendiente, también periódicas y asignadas.
-  const todasLasTareas = [...dailyTasks, ...periodicTasks, ...customTasks];
+  const manualDailyTasks = dailyTasks.filter(t => !isEggWorkflowTask(t));
+  const manualPeriodicTasks = periodicTasks.filter(t => !isEggWorkflowTask(t));
+  const manualCustomTasks = customTasks.filter(t => !isEggWorkflowTask(t));
+  const hiddenEggTasks =
+    dailyTasks.length + periodicTasks.length + customTasks.length -
+    manualDailyTasks.length - manualPeriodicTasks.length - manualCustomTasks.length;
+  const eggDone = recoleccionHoy && bandejasPorEmpacar <= 0;
+  const eggRequired = !isSunday(today) || recoleccionHoy || bandejasPorEmpacar > 0;
+  const treatmentDoneCount = activeTreatments.filter(t => confirmedTreatments.includes(t.id)).length;
+  const eggDisplayDone = !eggRequired || eggDone;
+  const systemTotal = 1 + activeTreatments.length;
+  const systemDone = (eggDisplayDone ? 1 : 0) + treatmentDoneCount;
+  const eggSectionTotal = 1;
+  const eggSectionDone = eggDisplayDone ? 1 : 0;
+  const manualDailyDone = manualDailyTasks.filter(t => completedIds.includes(t.id)).length;
+  const hoyHechas = eggSectionDone + manualDailyDone;
+  const hoyTotal = eggSectionTotal + manualDailyTasks.length;
+  // Progreso del día (anillo): pendientes del sistema + tareas manuales.
+  const todasLasTareas = [...manualDailyTasks, ...manualPeriodicTasks, ...manualCustomTasks];
   const todasHechas = todasLasTareas.filter(t => completedIds.includes(t.id)).length;
-  const cosasHechas = todasHechas + (recoleccionHoy ? 1 : 0);
-  const cosasTotal = todasLasTareas.length + 1;
+  const cosasHechas = todasHechas + systemDone;
+  const cosasTotal = todasLasTareas.length + systemTotal;
   const restan = cosasTotal - cosasHechas;
   const feedItems = stockItems.filter(i => i.is_feed);
   const otherItems = stockItems.filter(i => !i.is_feed);
   const allTreatmentsConfirmed = activeTreatments.length > 0 &&
     activeTreatments.every(t => confirmedTreatments.includes(t.id));
+  const afterRecollectionAlertHour = now.getHours() >= 18;
 
   const TaskItem = ({ task }: { task: Task }) => {
     const isDone = completedIds.includes(task.id);
@@ -379,6 +403,68 @@ export default function Dashboard() {
     );
   };
 
+  const renderEggSystemItem = () => {
+    if (!eggRequired) {
+      return (
+        <Link href="/dashboard/huevos"
+          className="flex items-center gap-3 p-4 rounded-2xl border bg-white border-gray-200 active:scale-[0.99] transition-all">
+          <Egg className="w-6 h-6 text-gray-400 shrink-0" />
+          <div className="flex-1">
+            <p className="text-base font-semibold text-gray-700">Domingo sin recolección programada</p>
+            <p className="text-xs text-gray-400 mt-0.5">Si juntaron huevos, se puede cargar igual</p>
+          </div>
+          <ChevronRight className="w-5 h-5 text-gray-300" />
+        </Link>
+      );
+    }
+
+    if (!recoleccionHoy) {
+      const urgent = afterRecollectionAlertHour;
+      return (
+        <Link href="/dashboard/huevos"
+          className={`flex items-center gap-3 p-4 rounded-2xl border active:scale-[0.99] transition-all
+            ${urgent ? 'bg-red-50 border-red-200' : 'bg-yellow-50 border-yellow-200'}`}>
+          <Egg className={`w-6 h-6 shrink-0 ${urgent ? 'text-red-600' : 'text-yellow-600'}`} />
+          <div className="flex-1">
+            <p className={`text-base font-semibold ${urgent ? 'text-red-800' : 'text-yellow-800'}`}>
+              Cargar huevos de hoy
+            </p>
+            <p className={`text-xs mt-0.5 ${urgent ? 'text-red-700/80' : 'text-yellow-700/80'}`}>
+              {urgent ? 'Ya pasó la hora habitual y falta la recolección' : 'Todavía no registraste la recolección'}
+            </p>
+          </div>
+          <ChevronRight className={`w-5 h-5 ${urgent ? 'text-red-500' : 'text-yellow-500'}`} />
+        </Link>
+      );
+    }
+
+    if (bandejasPorEmpacar > 0) {
+      return (
+        <Link href="/dashboard/huevos"
+          className="flex items-center gap-3 p-4 rounded-2xl border bg-amber-50 border-amber-200 active:scale-[0.99] transition-all">
+          <PackageCheck className="w-6 h-6 text-amber-600 shrink-0" />
+          <div className="flex-1">
+            <p className="text-base font-semibold text-amber-800">
+              {bandejasPorEmpacar} bandeja{bandejasPorEmpacar > 1 ? 's' : ''} para empacar
+            </p>
+            <p className="text-xs text-amber-700/80 mt-0.5">Hay empaque pendiente de producción ya cargada</p>
+          </div>
+          <ChevronRight className="w-5 h-5 text-amber-500" />
+        </Link>
+      );
+    }
+
+    return (
+      <div className="flex items-center gap-3 p-4 rounded-2xl border bg-green-50 border-green-200">
+        <Check className="w-6 h-6 text-green-600 shrink-0" />
+        <div className="flex-1">
+          <p className="text-base font-semibold text-green-800">Huevos al día</p>
+          <p className="text-xs text-green-700/80 mt-0.5">Recolección y empaque completos</p>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="min-h-screen bg-gray-50">
       <Header userName={profile.full_name} role={profile.role} />
@@ -391,7 +477,7 @@ export default function Dashboard() {
           <div className="flex-1 min-w-0">
             <h2 className="text-lg font-bold text-gray-900 truncate">Hola, {profile.full_name}</h2>
             <p className="text-xs text-gray-400 mt-0.5 capitalize">
-              {new Date().toLocaleDateString('es-AR', { weekday: 'long', day: 'numeric', month: 'long' })}
+              {now.toLocaleDateString('es-AR', { weekday: 'long', day: 'numeric', month: 'long' })}
               {totalAvesActivas > 0 && ` · ${totalAvesActivas} aves`}
             </p>
             <p className="text-sm text-gray-600 mt-1.5">
@@ -400,46 +486,21 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Tareas de hoy: huevos destacado + checklist diario */}
+        {/* Pendientes del sistema + checklist diario manual */}
         <div>
           <div className="flex items-center justify-between mb-3">
-            <h3 className="font-semibold text-gray-700 text-sm uppercase tracking-wide">Tareas de hoy</h3>
+            <h3 className="font-semibold text-gray-700 text-sm uppercase tracking-wide">Pendientes de hoy</h3>
             <span className="text-xs text-gray-400">{hoyHechas} de {hoyTotal} hechas</span>
           </div>
           <div className="space-y-2">
-            {!recoleccionHoy ? (
-              <Link href="/dashboard/huevos"
-                className="flex items-center gap-3 p-4 rounded-2xl border bg-yellow-50 border-yellow-200 active:scale-[0.99] transition-all">
-                <Egg className="w-6 h-6 text-yellow-600 shrink-0" />
-                <div className="flex-1">
-                  <p className="text-base font-semibold text-yellow-800">Cargar huevos de hoy</p>
-                  <p className="text-xs text-yellow-700/80 mt-0.5">Todavía no registraste la recolección</p>
-                </div>
-                <ChevronRight className="w-5 h-5 text-yellow-500" />
-              </Link>
-            ) : bandejasPorEmpacar > 0 ? (
-              <Link href="/dashboard/huevos"
-                className="flex items-center gap-3 p-4 rounded-2xl border bg-amber-50 border-amber-200 active:scale-[0.99] transition-all">
-                <PackageCheck className="w-6 h-6 text-amber-600 shrink-0" />
-                <div className="flex-1">
-                  <p className="text-base font-semibold text-amber-800">
-                    {bandejasPorEmpacar} bandeja{bandejasPorEmpacar > 1 ? 's' : ''} para empacar
-                  </p>
-                  <p className="text-xs text-amber-700/80 mt-0.5">Recolección cargada · falta el empaque</p>
-                </div>
-                <ChevronRight className="w-5 h-5 text-amber-500" />
-              </Link>
-            ) : (
-              <div className="flex items-center gap-3 p-4 rounded-2xl border bg-green-50 border-green-200">
-                <Check className="w-6 h-6 text-green-600 shrink-0" />
-                <div className="flex-1">
-                  <p className="text-base font-semibold text-green-800">Huevos al día</p>
-                  <p className="text-xs text-green-700/80 mt-0.5">Recolección y empaque completos</p>
-                </div>
-              </div>
-            )}
-            {dailyTasks.map(t => <TaskItem key={t.id} task={t} />)}
+            {renderEggSystemItem()}
+            {manualDailyTasks.map(t => <TaskItem key={t.id} task={t} />)}
           </div>
+          {hiddenEggTasks > 0 && (
+            <p className="text-[11px] text-gray-400 mt-2">
+              Las tareas manuales de huevos se ocultan acá para evitar duplicar el aviso automático.
+            </p>
+          )}
         </div>
 
         {/* ── Tratamientos activos ── */}
@@ -526,24 +587,24 @@ export default function Dashboard() {
         )}
 
         {/* Tareas periódicas */}
-        {periodicTasks.length > 0 && (
+        {manualPeriodicTasks.length > 0 && (
           <div>
             <div className="flex items-center gap-2 mb-3">
               <AlertTriangle className="w-4 h-4 text-orange-400" />
               <h3 className="font-semibold text-gray-700 text-sm uppercase tracking-wide">Tareas periódicas</h3>
             </div>
-            <div className="space-y-2">{periodicTasks.map(t => <TaskItem key={t.id} task={t} />)}</div>
+            <div className="space-y-2">{manualPeriodicTasks.map(t => <TaskItem key={t.id} task={t} />)}</div>
           </div>
         )}
 
         {/* Tareas asignadas */}
-        {customTasks.length > 0 && (
+        {manualCustomTasks.length > 0 && (
           <div>
             <div className="flex items-center gap-2 mb-3">
               <ClipboardList className="w-4 h-4 text-blue-400" />
               <h3 className="font-semibold text-gray-700 text-sm uppercase tracking-wide">Tareas asignadas</h3>
             </div>
-            <div className="space-y-2">{customTasks.map(t => <TaskItem key={t.id} task={t} />)}</div>
+            <div className="space-y-2">{manualCustomTasks.map(t => <TaskItem key={t.id} task={t} />)}</div>
           </div>
         )}
 

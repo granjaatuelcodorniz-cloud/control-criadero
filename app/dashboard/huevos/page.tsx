@@ -145,6 +145,10 @@ function nombreDia(date: string) {
   return new Date(date + 'T12:00:00').toLocaleDateString('es-AR', { weekday: 'long' });
 }
 
+function esDomingo(date: string) {
+  return new Date(date + 'T12:00:00').getDay() === 0;
+}
+
 // Fecha de hace n días, en hora local ('YYYY-MM-DD').
 function diasAtras(n: number) {
   const d = new Date();
@@ -382,7 +386,7 @@ export default function RegistroHuevos() {
     const pend: string[] = [];
     for (let i = 1; i <= 3; i++) {
       const d = diasAtras(i);
-      if (d !== hoy && !conReco.has(d)) pend.push(d);
+      if (d !== hoy && !esDomingo(d) && !conReco.has(d)) pend.push(d);
     }
     setDiasPendientes(pend);
   }, [user]);
