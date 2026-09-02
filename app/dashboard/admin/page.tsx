@@ -46,6 +46,16 @@ type StockItem = {
 };
 type StockMovement = { stock_item_id: number; quantity: number };
 
+function isProductionFeed(item: StockItem): boolean {
+  const name = item.name
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+
+  if (/\b(bb|bebe|baby|iniciador|recria|cria)\b/.test(name)) return false;
+  return /\b(ponedora|postura|adulto|adultas|produccion)\b/.test(name);
+}
+
 export default function AdminDashboard() {
   const { user, profile, loading: authLoading } = useAuth();
   const router = useRouter();
@@ -138,7 +148,7 @@ export default function AdminDashboard() {
           }
         });
 
-        const feedItems = stockItems.filter(item => item.is_feed);
+        const feedItems = stockItems.filter(item => item.is_feed && isProductionFeed(item));
         const feedIds = new Set(feedItems.map(item => item.id));
         const weeklyFeedKg = ((weekFeedRes.data || []) as StockMovement[])
           .filter(m => feedIds.has(m.stock_item_id))

@@ -6,7 +6,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useVisibilityReload } from '@/lib/visibility-reload';
 import { useRouter } from 'next/navigation';
 import Header from '@/components/Header';
-import { Search, Calendar, TrendingUp, Skull, Wheat } from 'lucide-react';
+import { Search, Calendar, TrendingUp, Skull, Wheat, BarChart2, Egg, Gauge, PackageCheck } from 'lucide-react';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -34,6 +34,9 @@ type FeedMovement = {
   quantity: number;
   stock_item_id: number;
 };
+
+type AnalysisTab = 'resumen' | 'produccion' | 'alimento' | 'eficiencia';
+type FeedCategory = 'produccion' | 'bb' | 'otro';
 
 // Registro enriquecido por día — consumo + fértiles integrados
 type DayFull = {
@@ -84,6 +87,17 @@ function sumFeedKg(movements: FeedMovement[], feedItemIds: Set<number>): number 
       .filter(m => feedItemIds.has(m.stock_item_id))
       .reduce((s, m) => s + (m.quantity ?? 0), 0) * 100
   ) / 100;
+}
+
+function getFeedCategory(item: FeedItem): FeedCategory {
+  const name = item.name
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+
+  if (/\b(bb|bebe|baby|iniciador|recria|cria)\b/.test(name)) return 'bb';
+  if (/\b(ponedora|postura|adulto|adultas|produccion)\b/.test(name)) return 'produccion';
+  return 'otro';
 }
 
 function formatKg(value: number): string {
@@ -258,12 +272,15 @@ export default function Analisis() {
 
   const today = getToday();
 
+  const [activeTab, setActiveTab] = useState<AnalysisTab>('resumen');
+
   // Global
   const [avesActuales, setAvesActuales] = useState(0);
   const [allLosses, setAllLosses] = useState<Loss[]>([]);
   const [allLots, setAllLots] = useState<LotInicio[]>([]);
   const [feedItems, setFeedItems] = useState<FeedItem[]>([]);
   const [weekFeedKg, setWeekFeedKg] = useState(0);
+  const [weekDays, setWeekDays] = useState<DayFull[]>([]);
 
   // Búsqueda por día
   const [searchDate, setSearchDate] = useState(today);
@@ -314,7 +331,7 @@ export default function Analisis() {
     const consumoMap = groupConsumo(consumoRes.data || []);
     const fertilesMap = groupFertiles(fertilesRes.data || []);
     const days = buildDaysFull(consumoMap, fertilesMap, aves, losses, lots);
-    const feedItemIds = new Set(feedItems.map(item => item.id));
+    const feedItemIds = new Set(feedItems.filter(item => getFeedCategory(item) === 'produccion').map(item => item.id));
     setMonthDays(days);
     setMonthLosses(lossesMonthRes.data?.reduce((s, l) => s + l.quantity, 0) || 0);
     setMonthFeedKg(sumFeedKg(feedMovRes.data || [], feedItemIds));
@@ -325,7 +342,7 @@ export default function Analisis() {
   // también al volver de segundo plano, para no quedar con datos viejos.
   const loadBase = useCallback(async () => {
     const weekFrom = addDays(today, -6);
-    const [slotsRes, lossesRes, lotsRes, feedItemsRes, weekFeedRes] = await Promise.all([
+    const [slotsRes, lossesRes, lotsRes, feedItemsRes, weekFeedRes, weekConsumoRes, weekFertilesRes] = await Promise.all([
       supabase.from('cage_slots').select('quantity'),
       supabase.from('lot_losses').select('date, quantity'),
       supabase.from('lots').select('start_date, initial_quantity').neq('status', 'cerrado'),
@@ -333,15 +350,26 @@ export default function Analisis() {
         .eq('is_feed', true).order('name'),
       supabase.from('stock_movements').select('date, quantity, stock_item_id')
         .eq('movement_type', 'salida').gte('date', weekFrom).lte('date', today),
+      supabase.from('consumo_empaque').select('date, docenas, rotos')
+        .gte('date', weekFrom).lte('date', today),
+      supabase.from('fertile_records').select('date, docenas_seleccionadas, descarte')
+        .gte('date', weekFrom).lte('date', today),
     ]);
     const aves = slotsRes.data?.reduce((s, sl) => s + sl.quantity, 0) || 0;
     const feedData = feedItemsRes.data || [];
-    const feedItemIds = new Set(feedData.map(item => item.id));
+    const feedItemIds = new Set(feedData.filter(item => getFeedCategory(item) === 'produccion').map(item => item.id));
     setAvesActuales(aves);
     setAllLosses(lossesRes.data || []);
     setAllLots(lotsRes.data || []);
     setFeedItems(feedData);
     setWeekFeedKg(sumFeedKg(weekFeedRes.data || [], feedItemIds));
+    setWeekDays(buildDaysFull(
+      groupConsumo(weekConsumoRes.data || []),
+      groupFertiles(weekFertilesRes.data || []),
+      aves,
+      lossesRes.data || [],
+      lotsRes.data || [],
+    ));
     setBaseDataReady(true);
   }, [today]);
 
@@ -411,7 +439,7 @@ export default function Analisis() {
     const consumoMap = groupConsumo(consumoRes.data || []);
     const fertilesMap = groupFertiles(fertilesRes.data || []);
     const days = buildDaysFull(consumoMap, fertilesMap, avesActuales, allLosses, allLots);
-    const feedItemIds = new Set(feedItems.map(item => item.id));
+    const feedItemIds = new Set(feedItems.filter(item => getFeedCategory(item) === 'produccion').map(item => item.id));
     setRangeDays(days);
     setRangeFeedKg(sumFeedKg(feedMovRes.data || [], feedItemIds));
     setLoading(false);
@@ -434,6 +462,8 @@ export default function Analisis() {
   const monthPeriodDays = daysBetweenInclusive(monthStart, monthEnd);
   const monthFeedKgPerDay = monthFeedKg / monthPeriodDays;
   const monthFeedKgPerBirdDay = avesActuales > 0 ? monthFeedKgPerDay / avesActuales : 0;
+  const monthKgPerDozen = monthTotalDocenas > 0 ? monthFeedKg / monthTotalDocenas : 0;
+  const monthKgPer100Eggs = monthTotalHuevos > 0 ? (monthFeedKg / monthTotalHuevos) * 100 : 0;
 
   // ── Cálculos rango ──────────────────────────────────────────────────────────
   const rangeTotalHuevos = rangeDays.reduce((s, d) => s + d.huevosTotal, 0);
@@ -443,11 +473,26 @@ export default function Analisis() {
   const rangePeriodDays = daysBetweenInclusive(dateFrom, dateTo);
   const rangeFeedKgPerDay = rangeFeedKg / rangePeriodDays;
   const rangeFeedKgPerBirdDay = avesActuales > 0 ? rangeFeedKgPerDay / avesActuales : 0;
+  const rangeKgPerDozen = rangeTotalDocenas > 0 ? rangeFeedKg / rangeTotalDocenas : 0;
+  const rangeKgPer100Eggs = rangeTotalHuevos > 0 ? (rangeFeedKg / rangeTotalHuevos) * 100 : 0;
 
-  const totalFeedStockKg = feedItems.reduce((s, item) => s + (item.current_quantity ?? 0), 0);
+  const productionFeedItems = feedItems.filter(item => getFeedCategory(item) === 'produccion');
+  const bbFeedItems = feedItems.filter(item => getFeedCategory(item) === 'bb');
+  const otherFeedItems = feedItems.filter(item => getFeedCategory(item) === 'otro');
+  const productionFeedStockKg = productionFeedItems.reduce((s, item) => s + (item.current_quantity ?? 0), 0);
   const weekFeedKgPerDay = weekFeedKg / 7;
   const weekFeedKgPerBirdDay = avesActuales > 0 ? weekFeedKgPerDay / avesActuales : 0;
-  const estimatedStockDays = weekFeedKgPerDay > 0 ? Math.floor(totalFeedStockKg / weekFeedKgPerDay) : null;
+  const estimatedStockDays = weekFeedKgPerDay > 0 ? Math.floor(productionFeedStockKg / weekFeedKgPerDay) : null;
+  const weekTotalHuevos = weekDays.reduce((s, d) => s + d.huevosTotal, 0);
+  const weekTotalDocenas = weekDays.reduce((s, d) => s + d.docenas, 0);
+  const weekPromPostura = avgPct(weekDays, 'pctPostura');
+  const weekKgPerDozen = weekTotalDocenas > 0 ? weekFeedKg / weekTotalDocenas : 0;
+  const weekKgPer100Eggs = weekTotalHuevos > 0 ? (weekFeedKg / weekTotalHuevos) * 100 : 0;
+  const avgProductionKgPerBag = productionFeedItems.length > 0
+    ? productionFeedItems.reduce((s, item) => s + (item.kg_por_bolsa ?? 0), 0) / productionFeedItems.length
+    : 0;
+  const weekOpenedBags = avgProductionKgPerBag > 0 ? weekFeedKg / avgProductionKgPerBag : 0;
+  const weekEggsPerBag = weekOpenedBags > 0 ? weekTotalHuevos / weekOpenedBags : 0;
 
   const monthOptions = Array.from({ length: 12 }, (_, i) => {
     const d = new Date(); d.setMonth(d.getMonth() - i);
@@ -465,24 +510,100 @@ export default function Analisis() {
 
   if (!profile) return null;
 
+  const tabs: { id: AnalysisTab; label: string; icon: typeof BarChart2 }[] = [
+    { id: 'resumen', label: 'Resumen', icon: BarChart2 },
+    { id: 'produccion', label: 'Producción', icon: Egg },
+    { id: 'alimento', label: 'Alimento', icon: Wheat },
+    { id: 'eficiencia', label: 'Eficiencia', icon: Gauge },
+  ];
+
   return (
     <div className="min-h-screen bg-gray-50">
       <Header userName={profile.full_name} role={profile.role} backHref="/dashboard/admin" backLabel="Dashboard" />
 
       <div className="max-w-2xl mx-auto px-4 py-6 space-y-6">
-        <h2 className="text-2xl font-bold text-gray-900">Análisis de Producción</h2>
+        <div>
+          <h2 className="text-2xl font-bold text-gray-900">Análisis</h2>
+          <p className="text-sm text-gray-400 mt-1">Producción, alimento y eficiencia del criadero</p>
+        </div>
+
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          {tabs.map(tab => (
+            <button key={tab.id} onClick={() => setActiveTab(tab.id)}
+              className={`px-3 py-2 rounded-xl text-xs font-bold whitespace-nowrap border-2 transition-all flex items-center gap-1.5
+                ${activeTab === tab.id
+                  ? 'bg-gray-900 border-gray-900 text-white'
+                  : 'bg-white border-gray-200 text-gray-500 hover:border-yellow-300'}`}>
+              <tab.icon className="w-3.5 h-3.5" />
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {activeTab === 'resumen' && (
+          <div className="space-y-6">
+            <section>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="bg-yellow-400 rounded-2xl p-4 border border-yellow-300">
+                  <p className="text-xs font-bold text-yellow-900/70 uppercase mb-1">Postura 7 días</p>
+                  <p className="text-3xl font-black text-yellow-950">{weekPromPostura !== null ? `${weekPromPostura}%` : '—'}</p>
+                  <p className="text-xs text-yellow-900/70 mt-1">{weekTotalHuevos} huevos</p>
+                </div>
+                <div className="bg-emerald-50 rounded-2xl p-4 border border-emerald-100">
+                  <p className="text-xs font-bold text-emerald-700 uppercase mb-1">Ponedora restante</p>
+                  <p className="text-3xl font-black text-emerald-800">
+                    {estimatedStockDays !== null ? estimatedStockDays : '—'}
+                    <span className="text-sm ml-1">días</span>
+                  </p>
+                  <p className="text-xs text-emerald-600 mt-1">{formatKg(productionFeedStockKg)} kg</p>
+                </div>
+                <StatCard label="Kg ponedora/ave/día" value={weekFeedKgPerBirdDay > 0 ? formatDecimal(weekFeedKgPerBirdDay) : '—'} />
+                <StatCard label="Kg por 100 huevos" value={weekKgPer100Eggs > 0 ? formatDecimal(weekKgPer100Eggs) : '—'} />
+                <StatCard label="Alimento 7 días" value={`${formatKg(weekFeedKg)} kg`} />
+                <StatCard label="Mortalidad mes" value={monthLosses} highlight={monthLosses > 0 ? 'red' : undefined} />
+              </div>
+            </section>
+
+            <section>
+              <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Lectura rápida</h3>
+              <div className="bg-white rounded-2xl border border-gray-100 divide-y divide-gray-50 overflow-hidden">
+                <div className="p-4 flex items-start gap-3">
+                  <PackageCheck className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-bold text-gray-800 text-sm">Eficiencia basada en ponedora</p>
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      El alimento BB, iniciador o recría queda separado y no entra en kg/docena.
+                    </p>
+                  </div>
+                </div>
+                <div className="p-4 flex items-start gap-3">
+                  <TrendingUp className="w-5 h-5 text-yellow-500 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-bold text-gray-800 text-sm">Últimos 7 días</p>
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      {weekKgPerDozen > 0
+                        ? `${formatDecimal(weekKgPerDozen)} kg por docena · ${formatDecimal(weekEggsPerBag)} huevos por bolsa`
+                        : 'Todavía falta combinar alimento ponedora y producción en la misma semana.'}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </div>
+        )}
 
         {/* ── Alimento ── */}
+        {activeTab === 'alimento' && (
         <section>
           <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Alimento</h3>
           <div className="bg-white rounded-2xl border border-gray-100 p-4 space-y-4">
             <div className="bg-emerald-50 rounded-2xl p-4 flex items-center justify-between border border-emerald-100">
               <div>
                 <p className="text-sm font-bold text-emerald-800 flex items-center gap-1">
-                  <Wheat className="w-4 h-4" /> Stock estimado
+                  <Wheat className="w-4 h-4" /> Ponedora estimada
                 </p>
                 <p className="text-xs text-emerald-700 mt-0.5">
-                  {formatKg(totalFeedStockKg)} kg disponibles
+                  {formatKg(productionFeedStockKg)} kg disponibles
                 </p>
               </div>
               <p className="text-4xl font-black text-emerald-800">
@@ -492,15 +613,16 @@ export default function Analisis() {
             </div>
 
             <div className="grid grid-cols-2 gap-2">
-              <StatCard label="Últimos 7 días" value={`${formatKg(weekFeedKg)} kg`} />
+              <StatCard label="Ponedora 7 días" value={`${formatKg(weekFeedKg)} kg`} />
               <StatCard label="Promedio diario" value={`${formatKg(weekFeedKgPerDay)} kg`} />
               <StatCard label="Kg/ave/día" value={weekFeedKgPerBirdDay > 0 ? formatDecimal(weekFeedKgPerBirdDay) : '—'} />
-              <StatCard label="Bolsas cerradas" value={feedItems.reduce((s, item) => s + (item.bolsas_restantes ?? 0), 0)} />
+              <StatCard label="Bolsas ponedora" value={productionFeedItems.reduce((s, item) => s + (item.bolsas_restantes ?? 0), 0)} />
             </div>
 
-            {feedItems.length > 1 && (
+            {productionFeedItems.length > 0 && (
               <div className="pt-2 border-t border-gray-50 space-y-2">
-                {feedItems.map(item => (
+                <p className="text-[10px] font-bold text-gray-400 uppercase">Ponedora / producción</p>
+                {productionFeedItems.map(item => (
                   <div key={item.id} className="flex items-center justify-between text-sm">
                     <span className="font-medium text-gray-600">{item.name}</span>
                     <span className="text-gray-400">
@@ -510,9 +632,44 @@ export default function Analisis() {
                 ))}
               </div>
             )}
+
+            {(bbFeedItems.length > 0 || otherFeedItems.length > 0) && (
+              <div className="pt-2 border-t border-gray-50 space-y-3">
+                {bbFeedItems.length > 0 && (
+                  <div className="space-y-2">
+                    <p className="text-[10px] font-bold text-gray-400 uppercase">BB / recría</p>
+                    {bbFeedItems.map(item => (
+                      <div key={item.id} className="flex items-center justify-between text-sm">
+                        <span className="font-medium text-gray-600">{item.name}</span>
+                        <span className="text-gray-400">
+                          {item.bolsas_restantes ?? 0} bolsas · {formatKg(item.current_quantity)} kg
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {otherFeedItems.length > 0 && (
+                  <div className="space-y-2">
+                    <p className="text-[10px] font-bold text-gray-400 uppercase">Sin clasificar</p>
+                    {otherFeedItems.map(item => (
+                      <div key={item.id} className="flex items-center justify-between text-sm">
+                        <span className="font-medium text-gray-600">{item.name}</span>
+                        <span className="text-gray-400">
+                          {item.bolsas_restantes ?? 0} bolsas · {formatKg(item.current_quantity)} kg
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </section>
+        )}
 
+        {activeTab === 'produccion' && (
+        <div className="space-y-6">
         {/* ── Búsqueda por día ── */}
         <section>
           <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Buscar día</h3>
@@ -627,9 +784,6 @@ export default function Analisis() {
                     <StatCard label="Total huevos" value={rangeTotalHuevos} />
                     <StatCard label="Promedio docenas/día" value={rangePromDocenas} />
                     <StatCard label="Días con registro" value={rangeDays.length} />
-                    <StatCard label="Alimento consumido" value={`${formatKg(rangeFeedKg)} kg`} />
-                    <StatCard label="Kg/ave/día" value={rangeFeedKgPerBirdDay > 0 ? formatDecimal(rangeFeedKgPerBirdDay) : '—'}
-                      sub={`${formatKg(rangeFeedKgPerDay)} kg/día`} />
                   </div>
                 </div>
               ) : (
@@ -675,9 +829,6 @@ export default function Analisis() {
                     <StatCard label="Total huevos" value={monthTotalHuevos} />
                     <StatCard label="Promedio docenas/día" value={monthDiasConReg > 0 ? Math.round(monthTotalDocenas / monthDiasConReg) : 0} />
                     <StatCard label="Días con registro" value={monthDiasConReg} />
-                    <StatCard label="Alimento consumido" value={`${formatKg(monthFeedKg)} kg`} />
-                    <StatCard label="Kg/ave/día" value={monthFeedKgPerBirdDay > 0 ? formatDecimal(monthFeedKgPerBirdDay) : '—'}
-                      sub={`${formatKg(monthFeedKgPerDay)} kg/día`} />
                   </div>
                 </div>
 
@@ -717,6 +868,83 @@ export default function Analisis() {
             )}
           </div>
         </section>
+        </div>
+        )}
+
+        {activeTab === 'eficiencia' && (
+          <div className="space-y-6">
+            <section>
+              <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Últimos 7 días</h3>
+              <div className="bg-white rounded-2xl border border-gray-100 p-4 space-y-4">
+                <div className="grid grid-cols-2 gap-2">
+                  <StatCard label="Kg ponedora" value={`${formatKg(weekFeedKg)} kg`} />
+                  <StatCard label="Kg/ave/día" value={weekFeedKgPerBirdDay > 0 ? formatDecimal(weekFeedKgPerBirdDay) : '—'} />
+                  <StatCard label="Kg por docena" value={weekKgPerDozen > 0 ? formatDecimal(weekKgPerDozen) : '—'} />
+                  <StatCard label="Kg por 100 huevos" value={weekKgPer100Eggs > 0 ? formatDecimal(weekKgPer100Eggs) : '—'} />
+                  <StatCard label="Huevos por bolsa" value={weekEggsPerBag > 0 ? Math.round(weekEggsPerBag) : '—'} />
+                  <StatCard label="Postura promedio" value={weekPromPostura !== null ? `${weekPromPostura}%` : '—'} />
+                </div>
+                {productionFeedItems.length === 0 && (
+                  <div className="bg-amber-50 border border-amber-100 rounded-2xl px-4 py-3">
+                    <p className="text-sm font-bold text-amber-800">Falta clasificar alimento ponedora</p>
+                    <p className="text-xs text-amber-700 mt-0.5">
+                      Para usar eficiencia, el alimento productivo debería incluir “ponedora”, “postura”, “adulto” o “producción” en el nombre.
+                    </p>
+                  </div>
+                )}
+              </div>
+            </section>
+
+            <section>
+              <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Intervalo consultado</h3>
+              <div className="bg-white rounded-2xl border border-gray-100 p-4 space-y-4">
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-xs text-gray-400 mb-1 block">Desde</label>
+                    <input type="date" className="input-base text-sm" value={dateFrom}
+                      max={dateTo} onChange={e => setDateFrom(e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-400 mb-1 block">Hasta</label>
+                    <input type="date" className="input-base text-sm" value={dateTo}
+                      min={dateFrom} max={today} onChange={e => setDateTo(e.target.value)} />
+                  </div>
+                </div>
+                <button onClick={handleSearchRange} disabled={loading}
+                  className="btn-primary w-full py-3 text-sm flex items-center justify-center gap-2">
+                  <Calendar className="w-4 h-4" /> Calcular eficiencia
+                </button>
+
+                {rangeSearched && (
+                  <div className="grid grid-cols-2 gap-2">
+                    <StatCard label="Kg ponedora" value={`${formatKg(rangeFeedKg)} kg`} />
+                    <StatCard label="Kg/ave/día" value={rangeFeedKgPerBirdDay > 0 ? formatDecimal(rangeFeedKgPerBirdDay) : '—'}
+                      sub={`${formatKg(rangeFeedKgPerDay)} kg/día`} />
+                    <StatCard label="Kg por docena" value={rangeKgPerDozen > 0 ? formatDecimal(rangeKgPerDozen) : '—'} />
+                    <StatCard label="Kg por 100 huevos" value={rangeKgPer100Eggs > 0 ? formatDecimal(rangeKgPer100Eggs) : '—'} />
+                  </div>
+                )}
+              </div>
+            </section>
+
+            <section>
+              <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Mes seleccionado</h3>
+              <div className="bg-white rounded-2xl border border-gray-100 p-4 space-y-4">
+                <select className="input-base" value={selectedMonth}
+                  onChange={e => handleMonthChange(e.target.value)}>
+                  {monthOptions.map(m => <option key={m.val} value={m.val}>{m.label}</option>)}
+                </select>
+                <div className="grid grid-cols-2 gap-2">
+                  <StatCard label="Kg ponedora" value={`${formatKg(monthFeedKg)} kg`} />
+                  <StatCard label="Kg/ave/día" value={monthFeedKgPerBirdDay > 0 ? formatDecimal(monthFeedKgPerBirdDay) : '—'}
+                    sub={`${formatKg(monthFeedKgPerDay)} kg/día`} />
+                  <StatCard label="Kg por docena" value={monthKgPerDozen > 0 ? formatDecimal(monthKgPerDozen) : '—'} />
+                  <StatCard label="Kg por 100 huevos" value={monthKgPer100Eggs > 0 ? formatDecimal(monthKgPer100Eggs) : '—'} />
+                </div>
+              </div>
+            </section>
+          </div>
+        )}
       </div>
     </div>
   );
