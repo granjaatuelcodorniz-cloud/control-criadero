@@ -13,6 +13,7 @@ import { useVisibilityReload } from '@/lib/visibility-reload';
 import { useRouter } from 'next/navigation';
 import { ConfirmDialog, ToastViewport, useToast } from '@/components/Feedback';
 import { assertSupabaseOk, getErrorMessage } from '@/lib/supabase-ops';
+import { getToday, toDateStr } from '@/lib/date';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -64,7 +65,7 @@ function tipoColor(t: string) {
 }
 
 function nextAppStatus(dateStr: string, today: string): 'overdue' | 'soon' | 'ok' {
-  const diff = Math.ceil((new Date(dateStr).getTime() - new Date(today).getTime()) / (1000 * 60 * 60 * 24));
+  const diff = Math.ceil((new Date(dateStr + 'T12:00:00').getTime() - new Date(today + 'T12:00:00').getTime()) / (1000 * 60 * 60 * 24));
   if (diff < 0) return 'overdue';
   if (diff <= 3) return 'soon';
   return 'ok';
@@ -73,8 +74,8 @@ function nextAppStatus(dateStr: string, today: string): 'overdue' | 'soon' | 'ok
 // Devuelve el día actual dentro del ciclo (1-based), o null si no está en ciclo
 function getTreatmentDay(record: HealthRecord, today: string): number | null {
   if (!record.duration_days) return null;
-  const start = new Date(record.date);
-  const current = new Date(today);
+  const start = new Date(record.date + 'T12:00:00');
+  const current = new Date(today + 'T12:00:00');
   const diff = Math.floor((current.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
   if (diff < 0 || diff >= record.duration_days) return null;
   return diff + 1;
@@ -191,7 +192,7 @@ export default function Sanidad() {
   const [doseApplied, setDoseApplied] = useState('');
   const [waterLiters, setWaterLiters] = useState('');
   const [notes, setNotes] = useState('');
-  const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+  const [date, setDate] = useState(getToday);
   const [nextApp, setNextApp] = useState('');
   const [nextAppDays, setNextAppDays] = useState('');
   const [durationDays, setDurationDays] = useState('');
@@ -217,7 +218,7 @@ export default function Sanidad() {
   const [pendingDelete, setPendingDelete] = useState<{ type: 'record' | 'product'; id: number } | null>(null);
   const { toast, showToast, hideToast } = useToast();
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = getToday();
   const flash = (message: string) => showToast(message);
 
   const loadData = useCallback(async () => {
@@ -265,9 +266,9 @@ export default function Sanidad() {
   // Próxima aplicación desde días
   useEffect(() => {
     if (!nextAppDays || isNaN(Number(nextAppDays))) return;
-    const d = new Date(date);
+    const d = new Date(date + 'T12:00:00');
     d.setDate(d.getDate() + Number(nextAppDays));
-    setNextApp(d.toISOString().split('T')[0]);
+    setNextApp(toDateStr(d));
   }, [nextAppDays, date]);
 
   const getAvesCount = (lotId: string) =>
@@ -300,7 +301,7 @@ export default function Sanidad() {
       setTipo(TIPOS[0]); setLotId(''); setProductId(''); setDosis('');
       setDoseCalculated(null); setDoseApplied(''); setWaterLiters('');
       setNotes(''); setNextApp(''); setNextAppDays(''); setDurationDays('');
-      setDate(new Date().toISOString().split('T')[0]);
+      setDate(getToday());
       setShowForm(false);
       flash('Registro sanitario guardado');
       await loadData();
@@ -341,10 +342,10 @@ export default function Sanidad() {
     if (!record.next_application || !postponeDays) return;
     setSaving(true);
     try {
-      const d = new Date(record.next_application);
+      const d = new Date(record.next_application + 'T12:00:00');
       d.setDate(d.getDate() + Number(postponeDays));
       assertSupabaseOk(await supabase.from('health_records')
-        .update({ next_application: d.toISOString().split('T')[0] })
+        .update({ next_application: toDateStr(d) })
         .eq('id', record.id));
       setPostponeId(null);
       flash('Aplicación pospuesta');
@@ -579,7 +580,7 @@ export default function Sanidad() {
                 <p className="text-[10px] text-blue-500 mt-1 ml-1">
                   Aparecerá en el dashboard de la colaboradora del {new Date(date + 'T12:00:00').toLocaleDateString('es-AR')} al{' '}
                   {(() => {
-                    const end = new Date(date);
+                    const end = new Date(date + 'T12:00:00');
                     end.setDate(end.getDate() + Number(durationDays) - 1);
                     return end.toLocaleDateString('es-AR');
                   })()}

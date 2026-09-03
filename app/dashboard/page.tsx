@@ -8,7 +8,7 @@ import Header from '@/components/Header';
 import BajaRapida from '@/components/BajaRapida';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { getToday } from '@/lib/date';
+import { getToday, toDateStr } from '@/lib/date';
 import {
   Egg, AlertTriangle, ClipboardList,
   Plus, X, FlaskConical, Check, ChevronRight, PackageCheck,
@@ -171,7 +171,7 @@ export default function Dashboard() {
       // Ventana de 14 días para calcular las bandejas de consumo que faltan empacar.
       const desde = new Date();
       desde.setDate(desde.getDate() - 14);
-      const desde14 = desde.toISOString().split('T')[0];
+      const desde14 = toDateStr(desde);
 
       const [tasksRes, completionsRes, slotsRes, stockRes, recordsRes, productsRes, lotsRes, confirmRes, recRes, empRes] = await Promise.all([
         supabase.from('tasks').select('id, description, type, frequency_days, next_execution, is_urgent')
@@ -214,6 +214,7 @@ export default function Dashboard() {
       if (lotsRes.data) setLots(lotsRes.data);
       if (slotsRes.data) setSlots(slotsRes.data);
       if (confirmRes.data) setConfirmedTreatments(confirmRes.data.map(c => c.record_id));
+      if (recordsRes.error) console.error('Error cargando tratamientos en dashboard colaborador:', recordsRes.error);
 
       // Filtrar tratamientos activos hoy — comparacion de strings evita bugs de timezone
       if (recordsRes.data) {
@@ -257,7 +258,7 @@ export default function Dashboard() {
       if (task.type === 'periodic' && task.frequency_days) {
         const next = new Date(today);
         next.setDate(next.getDate() + task.frequency_days);
-        await supabase.from('tasks').update({ next_execution: next.toISOString().split('T')[0], is_urgent: false }).eq('id', task.id);
+        await supabase.from('tasks').update({ next_execution: toDateStr(next), is_urgent: false }).eq('id', task.id);
       }
       setCompletedIds(prev => [...prev, task.id]);
       if (task.type === 'periodic') await loadData();
