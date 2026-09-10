@@ -35,6 +35,15 @@ type FeedMovement = {
   stock_item_id: number;
 };
 
+type ProductionCorrection = {
+  date: string;
+  original_huevos_total: number | null;
+  corrected_huevos_total: number;
+  corrected_docenas_total: number | null;
+  reason: string | null;
+  method: string | null;
+};
+
 type AnalysisTab = 'resumen' | 'produccion' | 'alimento' | 'eficiencia';
 type FeedCategory = 'produccion' | 'bb' | 'otro';
 
@@ -51,6 +60,12 @@ type DayFull = {
   huevosFertiles: number;  // docenasFertiles*12 + descarteFertiles
   // totales
   huevosTotal: number;     // huevosConsumo + huevosFertiles
+  originalHuevosTotal: number;
+  originalDocenas: number;
+  originalRotos: number;
+  isCorrected: boolean;
+  correctionReason: string | null;
+  correctionMethod: string | null;
   aves: number;            // aves que había ese día
   pctPostura: number | null;
   pctRotos: number | null;
@@ -106,6 +121,17 @@ function formatKg(value: number): string {
 
 function formatDecimal(value: number): string {
   return value.toLocaleString('es-AR', { maximumFractionDigits: 2 });
+}
+
+async function loadProductionCorrections(from: string, to: string): Promise<Map<string, ProductionCorrection>> {
+  const { data, error } = await supabase
+    .from('analysis_day_corrections')
+    .select('date, original_huevos_total, corrected_huevos_total, corrected_docenas_total, reason, method')
+    .gte('date', from)
+    .lte('date', to);
+
+  if (error) return new Map();
+  return new Map((data || []).map(row => [row.date, row]));
 }
 
 // Calcula cuántas aves había en una fecha dada:
@@ -164,35 +190,48 @@ function buildDaysFull(
   avesActuales: number,
   losses: Loss[],
   lots: LotInicio[],
+  corrections = new Map<string, ProductionCorrection>(),
 ): DayFull[] {
-  const allDates = new Set([...consumoMap.keys(), ...fertilesMap.keys()]);
+  const allDates = new Set([...consumoMap.keys(), ...fertilesMap.keys(), ...corrections.keys()]);
   const result: DayFull[] = [];
 
   for (const date of allDates) {
     const c = consumoMap.get(date) || { docenas: 0, rotos: 0 };
     const f = fertilesMap.get(date) || { docenas: 0, descarte: 0 };
+    const correction = corrections.get(date);
 
-    const huevosConsumo = (c.docenas * 12) + c.rotos;
+    const originalHuevosConsumo = (c.docenas * 12) + c.rotos;
     const huevosFertiles = (f.docenas * 12) + f.descarte;
-    const huevosTotal = huevosConsumo + huevosFertiles;
+    const originalHuevosTotal = originalHuevosConsumo + huevosFertiles;
+    const huevosTotal = correction?.corrected_huevos_total ?? originalHuevosTotal;
+    const correctedDocenasTotal = correction?.corrected_docenas_total ?? Math.round(huevosTotal / 12);
+    const docenas = correction ? correctedDocenasTotal : c.docenas;
+    const rotos = correction ? Math.max(0, huevosTotal - (docenas * 12) - huevosFertiles) : c.rotos;
+    const huevosConsumo = correction ? Math.max(0, huevosTotal - huevosFertiles) : originalHuevosConsumo;
 
     const aves = avesEnFecha(date, avesActuales, losses, lots);
     const pctPostura = aves > 0 && huevosTotal > 0
       ? Math.round((huevosTotal / aves) * 100)
       : null;
-    const pctRotos = huevosTotal > 0 && c.rotos > 0
+    const pctRotos = !correction && huevosTotal > 0 && c.rotos > 0
       ? Math.round((c.rotos / huevosTotal) * 100)
       : null;
 
     result.push({
       date,
-      docenas: c.docenas,
-      rotos: c.rotos,
+      docenas,
+      rotos,
       huevosConsumo,
       docenasFertiles: f.docenas,
       descarteFertiles: f.descarte,
       huevosFertiles,
       huevosTotal,
+      originalHuevosTotal: correction?.original_huevos_total ?? originalHuevosTotal,
+      originalDocenas: c.docenas,
+      originalRotos: c.rotos,
+      isCorrected: !!correction,
+      correctionReason: correction?.reason ?? null,
+      correctionMethod: correction?.method ?? null,
       aves,
       pctPostura,
       pctRotos,
@@ -224,10 +263,13 @@ function BarChart({ days, today }: { days: DayFull[]; today: string }) {
               style={{ minWidth: '28px' }}>
               {/* Número arriba — posicionado absolutamente para no cortar */}
               <span className="absolute -top-5 left-1/2 -translate-x-1/2 text-[9px] text-gray-400 whitespace-nowrap">
-                {d.huevosTotal > 0 ? d.huevosTotal : ''}
+                {d.huevosTotal > 0 ? `${d.huevosTotal}${d.isCorrected ? '*' : ''}` : ''}
               </span>
               <div
-                className={`w-full rounded-t-lg transition-all ${isToday ? 'bg-yellow-400' : 'bg-yellow-200'}`}
+                title={d.isCorrected ? `Corregido: ${d.originalHuevosTotal} -> ${d.huevosTotal}` : undefined}
+                className={`w-full rounded-t-lg transition-all ${
+                  d.isCorrected ? 'bg-amber-400' : isToday ? 'bg-yellow-400' : 'bg-yellow-200'
+                }`}
                 style={{ height: `${h}px` }}
               />
               <span className="text-[9px] text-gray-400">{dayLabel(d.date)}</span>
@@ -260,6 +302,20 @@ function StatCard({
         {value}
       </p>
       {sub && <p className="text-[10px] text-gray-400 mt-0.5">{sub}</p>}
+    </div>
+  );
+}
+
+function CorrectionNotice({ days }: { days: DayFull[] }) {
+  const corrected = days.filter(day => day.isCorrected);
+  if (corrected.length === 0) return null;
+
+  return (
+    <div className="bg-amber-50 border border-amber-100 rounded-xl px-3 py-2">
+      <p className="text-xs font-bold text-amber-800">Datos corregidos</p>
+      <p className="text-xs text-amber-700 mt-0.5">
+        {corrected.map(day => `${dayLabel(day.date)} ${day.originalHuevosTotal} -> ${day.huevosTotal}`).join(' · ')}
+      </p>
     </div>
   );
 }
@@ -317,7 +373,7 @@ export default function Analisis() {
     const lastDay = new Date(Number(year), Number(mon), 0).getDate();
     const to = `${year}-${mon}-${String(lastDay).padStart(2, '0')}`;
 
-    const [consumoRes, fertilesRes, lossesMonthRes, feedMovRes] = await Promise.all([
+    const [consumoRes, fertilesRes, lossesMonthRes, feedMovRes, corrections] = await Promise.all([
       supabase.from('consumo_empaque').select('date, docenas, rotos')
         .gte('date', from).lte('date', to),
       supabase.from('fertile_records').select('date, docenas_seleccionadas, descarte')
@@ -326,11 +382,12 @@ export default function Analisis() {
         .gte('date', from).lte('date', to),
       supabase.from('stock_movements').select('date, quantity, stock_item_id')
         .eq('movement_type', 'salida').gte('date', from).lte('date', to),
+      loadProductionCorrections(from, to),
     ]);
 
     const consumoMap = groupConsumo(consumoRes.data || []);
     const fertilesMap = groupFertiles(fertilesRes.data || []);
-    const days = buildDaysFull(consumoMap, fertilesMap, aves, losses, lots);
+    const days = buildDaysFull(consumoMap, fertilesMap, aves, losses, lots, corrections);
     const feedItemIds = new Set(feedItems.filter(item => getFeedCategory(item) === 'produccion').map(item => item.id));
     setMonthDays(days);
     setMonthLosses(lossesMonthRes.data?.reduce((s, l) => s + l.quantity, 0) || 0);
@@ -342,7 +399,7 @@ export default function Analisis() {
   // también al volver de segundo plano, para no quedar con datos viejos.
   const loadBase = useCallback(async () => {
     const weekFrom = addDays(today, -6);
-    const [slotsRes, lossesRes, lotsRes, feedItemsRes, weekFeedRes, weekConsumoRes, weekFertilesRes] = await Promise.all([
+    const [slotsRes, lossesRes, lotsRes, feedItemsRes, weekFeedRes, weekConsumoRes, weekFertilesRes, weekCorrections] = await Promise.all([
       supabase.from('cage_slots').select('quantity'),
       supabase.from('lot_losses').select('date, quantity'),
       supabase.from('lots').select('start_date, initial_quantity').neq('status', 'cerrado'),
@@ -354,6 +411,7 @@ export default function Analisis() {
         .gte('date', weekFrom).lte('date', today),
       supabase.from('fertile_records').select('date, docenas_seleccionadas, descarte')
         .gte('date', weekFrom).lte('date', today),
+      loadProductionCorrections(weekFrom, today),
     ]);
     const aves = slotsRes.data?.reduce((s, sl) => s + sl.quantity, 0) || 0;
     const feedData = feedItemsRes.data || [];
@@ -369,6 +427,7 @@ export default function Analisis() {
       aves,
       lossesRes.data || [],
       lotsRes.data || [],
+      weekCorrections,
     ));
     setBaseDataReady(true);
   }, [today]);
@@ -398,22 +457,23 @@ export default function Analisis() {
     setLoading(true);
     setDaySearched(true);
 
-    const [consumoRes, fertilesRes, notasRes] = await Promise.all([
+    const [consumoRes, fertilesRes, notasRes, corrections] = await Promise.all([
       supabase.from('consumo_empaque').select('date, docenas, rotos')
         .eq('date', searchDate),
       supabase.from('fertile_records').select('date, docenas_seleccionadas, descarte')
         .eq('date', searchDate),
       supabase.from('daily_records').select('notas').eq('date', searchDate),
+      loadProductionCorrections(searchDate, searchDate),
     ]);
 
     const consumoMap = groupConsumo(consumoRes.data || []);
     const fertilesMap = groupFertiles(fertilesRes.data || []);
 
-    if (consumoMap.size === 0 && fertilesMap.size === 0) {
+    if (consumoMap.size === 0 && fertilesMap.size === 0 && corrections.size === 0) {
       setDayData(null);
       setDayNotes([]);
     } else {
-      const days = buildDaysFull(consumoMap, fertilesMap, avesActuales, allLosses, allLots);
+      const days = buildDaysFull(consumoMap, fertilesMap, avesActuales, allLosses, allLots, corrections);
       setDayData(days[0] || null);
       setDayNotes(
         (notasRes.data || []).map(r => r.notas).filter((n): n is string => !!n)
@@ -427,18 +487,19 @@ export default function Analisis() {
     setLoading(true);
     setRangeSearched(true);
 
-    const [consumoRes, fertilesRes, feedMovRes] = await Promise.all([
+    const [consumoRes, fertilesRes, feedMovRes, corrections] = await Promise.all([
       supabase.from('consumo_empaque').select('date, docenas, rotos')
         .gte('date', dateFrom).lte('date', dateTo),
       supabase.from('fertile_records').select('date, docenas_seleccionadas, descarte')
         .gte('date', dateFrom).lte('date', dateTo),
       supabase.from('stock_movements').select('date, quantity, stock_item_id')
         .eq('movement_type', 'salida').gte('date', dateFrom).lte('date', dateTo),
+      loadProductionCorrections(dateFrom, dateTo),
     ]);
 
     const consumoMap = groupConsumo(consumoRes.data || []);
     const fertilesMap = groupFertiles(fertilesRes.data || []);
-    const days = buildDaysFull(consumoMap, fertilesMap, avesActuales, allLosses, allLots);
+    const days = buildDaysFull(consumoMap, fertilesMap, avesActuales, allLosses, allLots, corrections);
     const feedItemIds = new Set(feedItems.filter(item => getFeedCategory(item) === 'produccion').map(item => item.id));
     setRangeDays(days);
     setRangeFeedKg(sumFeedKg(feedMovRes.data || [], feedItemIds));
@@ -453,6 +514,7 @@ export default function Analisis() {
   const monthPromPostura = avgPct(monthDays, 'pctPostura');
   const monthPromRotos = avgPct(monthDays, 'pctRotos');
   const monthDiasConReg = monthDays.length;
+  const monthDiasCorregidos = monthDays.filter(day => day.isCorrected).length;
   const [monthYear, monthNumber] = selectedMonth.split('-').map(Number);
   const monthStart = `${selectedMonth}-01`;
   const monthLastDay = new Date(monthYear, monthNumber, 0).getDate();
@@ -470,6 +532,7 @@ export default function Analisis() {
   const rangeTotalDocenas = rangeDays.reduce((s, d) => s + d.docenas, 0);
   const rangePromPostura = avgPct(rangeDays, 'pctPostura');
   const rangePromDocenas = rangeDays.length > 0 ? Math.round(rangeTotalDocenas / rangeDays.length) : 0;
+  const rangeDiasCorregidos = rangeDays.filter(day => day.isCorrected).length;
   const rangePeriodDays = daysBetweenInclusive(dateFrom, dateTo);
   const rangeFeedKgPerDay = rangeFeedKg / rangePeriodDays;
   const rangeFeedKgPerBirdDay = avesActuales > 0 ? rangeFeedKgPerDay / avesActuales : 0;
@@ -561,6 +624,9 @@ export default function Analisis() {
                 <StatCard label="Kg por 100 huevos" value={weekKgPer100Eggs > 0 ? formatDecimal(weekKgPer100Eggs) : '—'} />
                 <StatCard label="Alimento 7 días" value={`${formatKg(weekFeedKg)} kg`} />
                 <StatCard label="Mortalidad mes" value={monthLosses} highlight={monthLosses > 0 ? 'red' : undefined} />
+              </div>
+              <div className="mt-3">
+                <CorrectionNotice days={weekDays} />
               </div>
             </section>
 
@@ -692,6 +758,19 @@ export default function Analisis() {
                     <span className="text-xs text-gray-400 ml-2">· {dayData.aves} aves</span>
                   </p>
 
+                  {dayData.isCorrected && (
+                    <div className="bg-amber-50 border border-amber-100 rounded-xl px-3 py-2">
+                      <p className="text-xs font-bold text-amber-800">Día corregido</p>
+                      <p className="text-xs text-amber-700 mt-0.5">
+                        Original {dayData.originalHuevosTotal} huevos; análisis usa {dayData.huevosTotal}.
+                        {dayData.correctionReason ? ` ${dayData.correctionReason}` : ''}
+                      </p>
+                      {dayData.correctionMethod && (
+                        <p className="text-[10px] text-amber-600 mt-1">{dayData.correctionMethod}</p>
+                      )}
+                    </div>
+                  )}
+
                   {/* Postura destacada */}
                   {dayData.pctPostura !== null && (
                     <div className="bg-yellow-400 rounded-2xl p-4 flex items-center justify-between">
@@ -771,6 +850,7 @@ export default function Analisis() {
               rangeDays.length > 0 || rangeFeedKg > 0 ? (
                 <div className="space-y-4">
                   {rangeDays.length > 0 && <BarChart days={rangeDays} today={today} />}
+                  <CorrectionNotice days={rangeDays} />
 
                   {rangePromPostura !== null && (
                     <div className="bg-yellow-400 rounded-2xl p-3 flex items-center justify-between">
@@ -783,7 +863,11 @@ export default function Analisis() {
                     <StatCard label="Total docenas" value={rangeTotalDocenas} />
                     <StatCard label="Total huevos" value={rangeTotalHuevos} />
                     <StatCard label="Promedio docenas/día" value={rangePromDocenas} />
-                    <StatCard label="Días con registro" value={rangeDays.length} />
+                    <StatCard
+                      label={rangeDiasCorregidos > 0 ? 'Días corregidos' : 'Días con registro'}
+                      value={rangeDiasCorregidos > 0 ? rangeDiasCorregidos : rangeDays.length}
+                      highlight={rangeDiasCorregidos > 0 ? 'orange' : undefined}
+                    />
                   </div>
                 </div>
               ) : (
@@ -805,6 +889,7 @@ export default function Analisis() {
             {monthDays.length > 0 || monthFeedKg > 0 ? (
               <div className="space-y-4">
                 {monthDays.length > 0 && <BarChart days={monthDays} today={today} />}
+                <CorrectionNotice days={monthDays} />
 
                 {/* Postura promedio destacada */}
                 {monthPromPostura !== null && (
@@ -815,6 +900,7 @@ export default function Analisis() {
                       </p>
                       <p className="text-xs text-yellow-800 mt-0.5">
                         Promedio de {monthDiasConReg} días registrados
+                        {monthDiasCorregidos > 0 ? `; ${monthDiasCorregidos} corregidos` : ''}
                       </p>
                     </div>
                     <p className="text-4xl font-black text-yellow-900">{monthPromPostura}%</p>
@@ -828,7 +914,11 @@ export default function Analisis() {
                     <StatCard label="Total docenas" value={monthTotalDocenas} />
                     <StatCard label="Total huevos" value={monthTotalHuevos} />
                     <StatCard label="Promedio docenas/día" value={monthDiasConReg > 0 ? Math.round(monthTotalDocenas / monthDiasConReg) : 0} />
-                    <StatCard label="Días con registro" value={monthDiasConReg} />
+                    <StatCard
+                      label={monthDiasCorregidos > 0 ? 'Días corregidos' : 'Días con registro'}
+                      value={monthDiasCorregidos > 0 ? monthDiasCorregidos : monthDiasConReg}
+                      highlight={monthDiasCorregidos > 0 ? 'orange' : undefined}
+                    />
                   </div>
                 </div>
 
