@@ -21,6 +21,30 @@ create policy "analysis_day_corrections_select_authenticated"
   to authenticated
   using (true);
 
+drop policy if exists "analysis_day_corrections_owner_write"
+  on public.analysis_day_corrections;
+
+create policy "analysis_day_corrections_owner_write"
+  on public.analysis_day_corrections
+  for all
+  to authenticated
+  using (
+    exists (
+      select 1
+      from public.profiles
+      where profiles.id = auth.uid()
+        and profiles.role = 'owner'
+    )
+  )
+  with check (
+    exists (
+      select 1
+      from public.profiles
+      where profiles.id = auth.uid()
+        and profiles.role = 'owner'
+    )
+  );
+
 insert into public.analysis_day_corrections (
   date,
   original_huevos_total,
