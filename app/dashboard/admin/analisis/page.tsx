@@ -6,7 +6,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useVisibilityReload } from '@/lib/visibility-reload';
 import { useRouter } from 'next/navigation';
 import Header from '@/components/Header';
-import { Search, Calendar, TrendingUp, Skull, Wheat, BarChart2, Egg, Gauge, PackageCheck, Save, Trash2 } from 'lucide-react';
+import { Search, Calendar, TrendingUp, Skull, Wheat, BarChart2, Egg, Gauge, PackageCheck, Save, Trash2, Wand2, Pencil } from 'lucide-react';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -47,6 +47,12 @@ type ProductionCorrection = {
 type CorrectionFormMessage = {
   type: 'success' | 'error';
   text: string;
+};
+
+type CorrectionSuggestion = {
+  huevos: number;
+  docenas: number;
+  method: string;
 };
 
 type AnalysisTab = 'resumen' | 'produccion' | 'alimento' | 'eficiencia';
@@ -158,6 +164,56 @@ async function loadRawProductionTotal(date: string) {
     docenasFertiles: fertiles.docenas,
     descarteFertiles: fertiles.descarte,
     huevosTotal: huevosConsumo + huevosFertiles,
+  };
+}
+
+async function loadCorrectionSuggestion(
+  date: string,
+  avesActuales: number,
+  losses: Loss[],
+  lots: LotInicio[]
+): Promise<CorrectionSuggestion | null> {
+  const from = addDays(date, -7);
+  const to = addDays(date, 7);
+  const [consumoRes, fertilesRes, corrections] = await Promise.all([
+    supabase.from('consumo_empaque').select('date, docenas, rotos').gte('date', from).lte('date', to),
+    supabase.from('fertile_records').select('date, docenas_seleccionadas, descarte').gte('date', from).lte('date', to),
+    loadProductionCorrections(from, to),
+  ]);
+
+  const consumoMap = groupConsumo(consumoRes.data || []);
+  const fertilesMap = groupFertiles(fertilesRes.data || []);
+  const dates = Array.from(new Set([...consumoMap.keys(), ...fertilesMap.keys()])).sort();
+  const healthyDays = dates
+    .filter(candidate => candidate !== date && !corrections.has(candidate))
+    .map(candidate => {
+      const consumo = consumoMap.get(candidate) || { docenas: 0, rotos: 0 };
+      const fertiles = fertilesMap.get(candidate) || { docenas: 0, descarte: 0 };
+      const total = (consumo.docenas * 12) + consumo.rotos + (fertiles.docenas * 12) + fertiles.descarte;
+      return { date: candidate, total };
+    })
+    .filter(day => {
+      if (day.total <= 0) return false;
+      const avesDelDia = avesEnFecha(day.date, avesActuales, losses, lots);
+      if (avesDelDia <= 0) return true;
+      return day.total >= Math.round(avesDelDia * 0.35) && day.total <= Math.round(avesDelDia * 1.05);
+    });
+
+  const before = healthyDays.filter(day => day.date < date).at(-1);
+  const after = healthyDays.find(day => day.date > date);
+  const referenceDays = [before, after].filter((day): day is { date: string; total: number } => !!day);
+
+  if (referenceDays.length === 0) return null;
+
+  const huevos = Math.round(referenceDays.reduce((sum, day) => sum + day.total, 0) / referenceDays.length);
+  const method = referenceDays.length === 2
+    ? `Promedio de dias vecinos confiables: ${before?.date} (${before?.total}) y ${after?.date} (${after?.total}).`
+    : `Estimado con el dia confiable mas cercano: ${referenceDays[0].date} (${referenceDays[0].total}).`;
+
+  return {
+    huevos,
+    docenas: Math.round(huevos / 12),
+    method,
   };
 }
 
@@ -382,6 +438,9 @@ export default function Analisis() {
   const [correctionReason, setCorrectionReason] = useState('');
   const [correctionMethod, setCorrectionMethod] = useState('');
   const [correctionMessage, setCorrectionMessage] = useState<CorrectionFormMessage | null>(null);
+  const [correctionSuggestion, setCorrectionSuggestion] = useState<CorrectionSuggestion | null>(null);
+  const [correctionSuggestionLoading, setCorrectionSuggestionLoading] = useState(false);
+  const [savedCorrections, setSavedCorrections] = useState<ProductionCorrection[]>([]);
 
   // Rango
   const [dateFrom, setDateFrom] = useState(() => {
@@ -491,6 +550,21 @@ export default function Analisis() {
     setSelectedMonth(month);
   };
 
+  const loadSavedCorrections = useCallback(async () => {
+    const { data } = await supabase
+      .from('analysis_day_corrections')
+      .select('date, original_huevos_total, corrected_huevos_total, corrected_docenas_total, reason, method')
+      .order('date', { ascending: false })
+      .limit(12);
+
+    setSavedCorrections(data || []);
+  }, []);
+
+  useEffect(() => {
+    if (!baseDataReady) return;
+    void loadSavedCorrections();
+  }, [baseDataReady, loadSavedCorrections]);
+
   // ── Búsqueda día ────────────────────────────────────────────────────────────
   const handleSearchDay = async () => {
     setLoading(true);
@@ -522,22 +596,26 @@ export default function Analisis() {
   };
 
   const refreshAnalysisAfterCorrection = async (changedDate: string) => {
-    await loadBase();
-    await loadMonth(selectedMonth, avesActuales, allLosses, allLots);
     if (rangeSearched && changedDate >= dateFrom && changedDate <= dateTo) await handleSearchRange();
     if (daySearched && changedDate === searchDate) await handleSearchDay();
+    await Promise.all([
+      loadBase(),
+      loadSavedCorrections(),
+    ]);
   };
 
-  const handleLoadCorrectionDay = async () => {
+  const handleLoadCorrectionDay = async (date = correctionDate) => {
     setCorrectionLoading(true);
     setCorrectionLoaded(true);
     setCorrectionMessage(null);
+    setCorrectionSuggestion(null);
+    setCorrectionDate(date);
 
     const [rawDay, corrections] = await Promise.all([
-      loadRawProductionTotal(correctionDate),
-      loadProductionCorrections(correctionDate, correctionDate),
+      loadRawProductionTotal(date),
+      loadProductionCorrections(date, date),
     ]);
-    const existing = corrections.get(correctionDate);
+    const existing = corrections.get(date);
     const originalHuevos = existing?.original_huevos_total ?? rawDay.huevosTotal;
 
     setCorrectionOriginalHuevos(originalHuevos);
@@ -546,6 +624,25 @@ export default function Analisis() {
     setCorrectionReason(existing?.reason ?? '');
     setCorrectionMethod(existing?.method ?? '');
     setCorrectionLoading(false);
+  };
+
+  const handleSuggestCorrection = async () => {
+    setCorrectionSuggestionLoading(true);
+    setCorrectionMessage(null);
+
+    const suggestion = await loadCorrectionSuggestion(correctionDate, avesActuales, allLosses, allLots);
+    setCorrectionSuggestion(suggestion);
+
+    if (suggestion) {
+      setCorrectionHuevos(String(suggestion.huevos));
+      setCorrectionDocenas(String(suggestion.docenas));
+      if (!correctionReason.trim()) setCorrectionReason('Dato estimado por mala anotacion');
+      setCorrectionMethod(suggestion.method);
+    } else {
+      setCorrectionMessage({ type: 'error', text: 'No encontré días vecinos confiables para estimar.' });
+    }
+
+    setCorrectionSuggestionLoading(false);
   };
 
   const handleSaveCorrection = async () => {
@@ -583,21 +680,24 @@ export default function Analisis() {
     setCorrectionSaving(false);
   };
 
-  const handleDeleteCorrection = async () => {
+  const handleDeleteCorrection = async (date = correctionDate) => {
     setCorrectionSaving(true);
     setCorrectionMessage(null);
 
-    const { error } = await supabase.from('analysis_day_corrections').delete().eq('date', correctionDate);
+    const { error } = await supabase.from('analysis_day_corrections').delete().eq('date', date);
     if (error) {
       setCorrectionMessage({ type: 'error', text: error.message || 'No se pudo quitar la corrección.' });
     } else {
-      const rawDay = await loadRawProductionTotal(correctionDate);
-      setCorrectionHuevos(String(rawDay.huevosTotal));
-      setCorrectionDocenas(String(Math.round(rawDay.huevosTotal / 12)));
-      setCorrectionReason('');
-      setCorrectionMethod('');
+      if (date === correctionDate) {
+        const rawDay = await loadRawProductionTotal(date);
+        setCorrectionHuevos(String(rawDay.huevosTotal));
+        setCorrectionDocenas(String(Math.round(rawDay.huevosTotal / 12)));
+        setCorrectionReason('');
+        setCorrectionMethod('');
+        setCorrectionSuggestion(null);
+      }
       setCorrectionMessage({ type: 'success', text: 'Corrección quitada.' });
-      await refreshAnalysisAfterCorrection(correctionDate);
+      await refreshAnalysisAfterCorrection(date);
     }
     setCorrectionSaving(false);
   };
@@ -956,7 +1056,7 @@ export default function Analisis() {
                   setCorrectionLoaded(false);
                   setCorrectionMessage(null);
                 }} />
-              <button onClick={handleLoadCorrectionDay} disabled={correctionLoading || correctionSaving}
+              <button onClick={() => handleLoadCorrectionDay()} disabled={correctionLoading || correctionSaving}
                 className="btn-primary px-4 py-2">
                 <Search className="w-4 h-4" />
               </button>
@@ -973,6 +1073,21 @@ export default function Analisis() {
                       : '—'}
                   />
                 </div>
+
+                <button onClick={handleSuggestCorrection} disabled={correctionSuggestionLoading || correctionSaving}
+                  className="w-full py-3 text-sm rounded-xl border-2 border-amber-200 bg-amber-50 text-amber-800 font-bold flex items-center justify-center gap-2">
+                  <Wand2 className="w-4 h-4" />
+                  {correctionSuggestionLoading ? 'Estimando...' : 'Sugerir estimado'}
+                </button>
+
+                {correctionSuggestion && (
+                  <div className="bg-amber-50 border border-amber-100 rounded-xl px-3 py-2">
+                    <p className="text-xs font-bold text-amber-800">Sugerencia aplicada</p>
+                    <p className="text-xs text-amber-700 mt-0.5">
+                      {correctionSuggestion.huevos} huevos · {correctionSuggestion.docenas} docenas
+                    </p>
+                  </div>
+                )}
 
                 <div className="grid grid-cols-2 gap-2">
                   <div>
@@ -1034,11 +1149,52 @@ export default function Analisis() {
                     className="btn-primary py-3 text-sm flex items-center justify-center gap-2">
                     <Save className="w-4 h-4" /> Guardar
                   </button>
-                  <button onClick={handleDeleteCorrection} disabled={correctionSaving || correctionLoading}
+                  <button onClick={() => handleDeleteCorrection()} disabled={correctionSaving || correctionLoading}
                     className="py-3 text-sm rounded-xl border-2 border-gray-200 text-gray-500 font-bold flex items-center justify-center gap-2">
                     <Trash2 className="w-4 h-4" /> Quitar
                   </button>
                 </div>
+              </div>
+            )}
+
+            {savedCorrections.length > 0 && (
+              <div className="pt-2 border-t border-gray-50 space-y-2">
+                <p className="text-[10px] font-bold text-gray-400 uppercase">Correcciones guardadas</p>
+                {savedCorrections.map(correction => (
+                  <div key={correction.date} className="rounded-xl border border-gray-100 px-3 py-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <p className="text-sm font-bold text-gray-800">{correction.date}</p>
+                        <p className="text-xs text-gray-500 mt-0.5">
+                          {correction.original_huevos_total ?? '—'} -&gt; {correction.corrected_huevos_total}
+                          {correction.corrected_docenas_total !== null ? ` · ${correction.corrected_docenas_total} docenas` : ''}
+                        </p>
+                        {correction.reason && (
+                          <p className="text-[10px] text-gray-400 mt-1 line-clamp-2">{correction.reason}</p>
+                        )}
+                      </div>
+                      <div className="flex gap-1 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => handleLoadCorrectionDay(correction.date)}
+                          className="w-9 h-9 rounded-lg border border-gray-200 text-gray-500 flex items-center justify-center"
+                          title="Editar corrección"
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteCorrection(correction.date)}
+                          disabled={correctionSaving || correctionLoading}
+                          className="w-9 h-9 rounded-lg border border-gray-200 text-gray-500 flex items-center justify-center"
+                          title="Quitar corrección"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </div>
