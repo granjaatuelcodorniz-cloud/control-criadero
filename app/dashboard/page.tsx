@@ -11,22 +11,16 @@ import { useRouter } from 'next/navigation';
 import { getToday, toDateStr } from '@/lib/date';
 import { ToastViewport, useToast } from '@/components/Feedback';
 import { assertSupabaseAllOk, assertSupabaseOk } from '@/lib/supabase-ops';
-import { RECOLECCION_SYNCED } from '@/lib/offline-sync';
+import { guardarTrabajo, RECOLECCION_SYNCED } from '@/lib/offline-sync';
+import { useOnlineStatus } from '@/lib/connection';
+import { getPendingWork, WORK_SYNCED, type Task } from '@/lib/trabajo';
+import { useTrabajo } from '@/lib/use-trabajo';
 import {
   Egg, AlertTriangle, ClipboardList,
   Plus, X, FlaskConical, Check, ChevronRight, PackageCheck,
 } from 'lucide-react';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
-
-type Task = {
-  id: number;
-  description: string;
-  type: 'daily' | 'periodic' | 'custom';
-  frequency_days?: number;
-  next_execution?: string | null;
-  is_urgent?: boolean;
-};
 
 type StockItem = {
   id: number;
@@ -56,8 +50,6 @@ type HealthProduct = {
   unit: string;
 };
 
-type Lot = { id: number; code: string; current_quantity: number };
-type CageSlot = { id: number; lot_id: number; slot_code: string; quantity: number };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -81,7 +73,7 @@ function isSunday(date: string): boolean {
 }
 
 function isEggWorkflowTask(task: Task): boolean {
-  return /huevo|recolecci[oó]n|recolectar|empacar|empaque/i.test(task.description);
+  return typeof task.id === 'number' && /huevo|recolecci[oó]n|recolectar|empacar|empaque/i.test(task.description);
 }
 
 function tipoColor(t: string) {
@@ -120,18 +112,12 @@ function ProgressRing({ done, total }: { done: number; total: number }) {
 export default function Dashboard() {
   const { user, profile, loading: authLoading } = useAuth();
   const router = useRouter();
+  const online = useOnlineStatus();
 
-  const [dailyTasks, setDailyTasks] = useState<Task[]>([]);
-  const [periodicTasks, setPeriodicTasks] = useState<Task[]>([]);
-  const [customTasks, setCustomTasks] = useState<Task[]>([]);
-  const [completedIds, setCompletedIds] = useState<number[]>([]);
   const [stockItems, setStockItems] = useState<StockItem[]>([]);
-  const [totalAvesActivas, setTotalAvesActivas] = useState(0);
   const [activeTreatments, setActiveTreatments] = useState<ActiveTreatment[]>([]);
   const [confirmedTreatments, setConfirmedTreatments] = useState<number[]>([]); // record_ids confirmed today
   const [products, setProducts] = useState<HealthProduct[]>([]);
-  const [lots, setLots] = useState<Lot[]>([]);
-  const [slots, setSlots] = useState<CageSlot[]>([]);
   const [recoleccionHoy, setRecoleccionHoy] = useState(false);
   const [bandejasPorEmpacar, setBandejasPorEmpacar] = useState(0);
 
@@ -140,7 +126,6 @@ export default function Dashboard() {
   const [confirmStock, setConfirmStock] = useState<number | null>(null);
   const [showExtraTask, setShowExtraTask] = useState(false);
   const [extraTaskDesc, setExtraTaskDesc] = useState('');
-  const [loading, setLoading] = useState(true);
   const [hasData, setHasData] = useState(false);
   const [loadFailed, setLoadFailed] = useState(false);
   const [confirmingTreatment, setConfirmingTreatment] = useState<number | null>(null);
@@ -150,30 +135,35 @@ export default function Dashboard() {
 
   const [today, setToday] = useState(getToday);
   const [now, setNow] = useState(() => new Date());
+  const work = useTrabajo(profile?.role === 'collaborator' ? user?.id : undefined, today);
+  const { tasks, completedIds, slots, lots, pendingTasks } = work;
+  const totalAvesActivas = slots.reduce((total, slot) => total + slot.quantity, 0);
 
   // Detectar cambio de día — recarga si la app quedó abierta de un día al otro
   useEffect(() => {
-    const interval = setInterval(() => {
+    const refreshDay = () => {
       setNow(new Date());
-      const newToday = getToday();
-      if (newToday !== today) setToday(newToday);
-    }, 60000);
-    return () => clearInterval(interval);
-  }, [today]);
+      setToday(getToday());
+    };
+    const interval = setInterval(refreshDay, 60000);
+    document.addEventListener('visibilitychange', refreshDay);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', refreshDay);
+    };
+  }, []);
 
   const loadData = useCallback(async () => {
     if (!user || !navigator.onLine) return;
     try {
-      // Limpiar tareas custom completadas en días anteriores
-      const { data: oldCustomCompletions } = await supabase
-        .from('task_completions')
-        .select('task_id')
-        .eq('user_id', user.id)
-        .lt('date', today);
-
-      if (oldCustomCompletions && oldCustomCompletions.length > 0) {
-        const oldIds = oldCustomCompletions.map(c => c.task_id);
-        await supabase.from('tasks').update({ is_active: false }).in('id', oldIds).eq('type', 'custom');
+      const pending = await getPendingWork(user.id).catch(() => null);
+      if (pending && !pending.some(item => item.kind === 'tarea_estado')) {
+        const { data: oldCompletions } = await supabase.from('task_completions')
+          .select('task_id').eq('user_id', user.id).eq('completed', true).lt('date', today);
+        if (oldCompletions?.length) {
+          await supabase.from('tasks').update({ is_active: false })
+            .in('id', oldCompletions.map(item => item.task_id)).eq('type', 'custom').eq('is_active', true);
+        }
       }
 
       // Ventana de 14 días para calcular las bandejas de consumo que faltan empacar.
@@ -181,23 +171,15 @@ export default function Dashboard() {
       desde.setDate(desde.getDate() - 14);
       const desde14 = toDateStr(desde);
 
-      const [tasksRes, completionsRes, slotsRes, stockRes, recordsRes, productsRes, lotsRes, confirmRes, recRes, empRes] = await Promise.all([
-        supabase.from('tasks').select('id, description, type, frequency_days, next_execution, is_urgent')
-          .eq('is_active', true)
-          .or(`assigned_to.is.null,assigned_to.eq.${user.id}`)
-          .or(`type.eq.daily,type.eq.custom,and(type.eq.periodic,next_execution.lte.${today})`)
-          .order('type'),
-        supabase.from('task_completions').select('task_id').eq('user_id', user.id).eq('date', today),
-        supabase.from('cage_slots').select('id, lot_id, slot_code, quantity'),
+      const [stockRes, recordsRes, productsRes, confirmRes, recRes, empRes] = await Promise.all([
         supabase.from('stock_items').select('id, name, unit, current_quantity, is_feed, bolsas_restantes, kg_por_bolsa').order('name'),
         supabase.from('health_records').select('id, type, date, lot_id, dose_applied, water_liters, duration_days, health_product_id, notes'),
         supabase.from('health_products').select('id, name, unit'),
-        supabase.from('lots').select('id, code, current_quantity').eq('status', 'activo'),
         supabase.from('treatment_confirmations').select('record_id').eq('date', today),
         supabase.from('daily_records').select('date, bandejas_consumo').gte('date', desde14),
         supabase.from('consumo_empaque').select('date, bandejas').gte('date', desde14),
       ]);
-      assertSupabaseAllOk([tasksRes, completionsRes, slotsRes, stockRes, recordsRes, productsRes, lotsRes, confirmRes, recRes, empRes]);
+      assertSupabaseAllOk([stockRes, recordsRes, productsRes, confirmRes, recRes, empRes]);
 
       // Estado de huevos: ¿se cargó recolección hoy? ¿cuántas bandejas faltan empacar?
       const recRows = recRes.data ?? [];
@@ -211,17 +193,8 @@ export default function Dashboard() {
       recoPorDia.forEach((reco, date) => { porEmpacar += Math.max(0, reco - (empPorDia.get(date) ?? 0)); });
       setBandejasPorEmpacar(porEmpacar);
 
-      if (tasksRes.data) {
-        setDailyTasks(tasksRes.data.filter(t => t.type === 'daily'));
-        setPeriodicTasks(tasksRes.data.filter(t => t.type === 'periodic'));
-        setCustomTasks(tasksRes.data.filter(t => t.type === 'custom'));
-      }
-      if (completionsRes.data) setCompletedIds(completionsRes.data.map(c => c.task_id));
-      if (slotsRes.data) setTotalAvesActivas(slotsRes.data.reduce((s, sl) => s + sl.quantity, 0));
       if (stockRes.data) setStockItems(stockRes.data);
       if (productsRes.data) setProducts(productsRes.data);
-      if (lotsRes.data) setLots(lotsRes.data);
-      if (slotsRes.data) setSlots(slotsRes.data);
       if (confirmRes.data) setConfirmedTreatments(confirmRes.data.map(c => c.record_id));
 
       // Filtrar tratamientos activos hoy — comparacion de strings evita bugs de timezone
@@ -242,8 +215,6 @@ export default function Dashboard() {
     } catch (error) {
       setLoadFailed(true);
       console.error('Error cargando dashboard colaborador:', error);
-    } finally {
-      setLoading(false);
     }
   }, [user, today]);
 
@@ -258,32 +229,21 @@ export default function Dashboard() {
 
   useEffect(() => {
     window.addEventListener(RECOLECCION_SYNCED, loadData);
-    return () => window.removeEventListener(RECOLECCION_SYNCED, loadData);
+    window.addEventListener(WORK_SYNCED, loadData);
+    return () => {
+      window.removeEventListener(RECOLECCION_SYNCED, loadData);
+      window.removeEventListener(WORK_SYNCED, loadData);
+    };
   }, [loadData]);
 
   // ── Toggle tarea ────────────────────────────────────────────────────────────
   const toggleTask = async (task: Task) => {
     if (!user || savingTask) return;
     setSavingTask(true);
-    const isDone = completedIds.includes(task.id);
     try {
-      if (isDone) {
-        assertSupabaseOk(await supabase.from('task_completions').delete()
-          .eq('task_id', task.id).eq('user_id', user.id).eq('date', today));
-        setCompletedIds(prev => prev.filter(id => id !== task.id));
-      } else {
-        assertSupabaseOk(await supabase.from('task_completions').insert({ task_id: task.id, user_id: user.id, completed: true, date: today }));
-        setCompletedIds(prev => [...prev, task.id]);
-        if (task.type === 'periodic' && task.frequency_days) {
-          const next = new Date(`${today}T12:00:00`);
-          next.setDate(next.getDate() + task.frequency_days);
-          const { error } = await supabase.from('tasks').update({ next_execution: toDateStr(next), is_urgent: false }).eq('id', task.id);
-          if (error) showToast('La tarea se marcó como hecha, pero no se pudo reprogramar.', 'error');
-          else await loadData();
-        }
-      }
+      await guardarTrabajo('tarea_estado', { task: task.id, date: today, user_id: user.id, completed: !completedIds.includes(task.id) });
     } catch {
-      showToast('No se pudo actualizar la tarea. Revisá la conexión.', 'error');
+      showToast('No se pudo guardar el estado de la tarea. Probá de nuevo.', 'error');
     } finally {
       setSavingTask(false);
     }
@@ -291,7 +251,7 @@ export default function Dashboard() {
 
   // ── Confirmar tratamiento ───────────────────────────────────────────────────
   const updateTreatment = async (recordId: number, confirm: boolean) => {
-    if (!user || confirmingTreatment !== null) return;
+    if (!user || !navigator.onLine || confirmingTreatment !== null) return;
     setConfirmingTreatment(recordId);
     try {
       const result = confirm
@@ -311,13 +271,9 @@ export default function Dashboard() {
     if (!extraTaskDesc.trim() || !user || savingExtraTask) return;
     setSavingExtraTask(true);
     try {
-      assertSupabaseOk(await supabase.from('tasks').insert({
-        description: extraTaskDesc.trim(), type: 'custom',
-        is_active: true, created_by: user.id, assigned_to: user.id,
-      }));
+      await guardarTrabajo('tarea_nueva', { description: extraTaskDesc.trim(), user_id: user.id, date: today });
       setExtraTaskDesc('');
       setShowExtraTask(false);
-      await loadData();
     } catch {
       showToast('No se pudo guardar la tarea. Conservamos la descripción.', 'error');
     } finally {
@@ -327,7 +283,7 @@ export default function Dashboard() {
 
   // ── Insumos ─────────────────────────────────────────────────────────────────
   const handleOpenBolsa = async (feedItem: StockItem) => {
-    if (!feedItem?.kg_por_bolsa || !feedItem?.bolsas_restantes || !user || savingStock) return;
+    if (!feedItem?.kg_por_bolsa || !feedItem?.bolsas_restantes || !user || savingStock || !navigator.onLine) return;
     setSavingStock(true);
     setConfirmStock(null);
     try {
@@ -353,7 +309,7 @@ export default function Dashboard() {
   };
 
   const handleUseItem = async (item: StockItem) => {
-    if (!user || savingStock) return;
+    if (!user || savingStock || !navigator.onLine) return;
     setSavingStock(true);
     setConfirmStock(null);
     try {
@@ -375,7 +331,7 @@ export default function Dashboard() {
   };
 
   // ── Render ──────────────────────────────────────────────────────────────────
-  if (authLoading || loading) return (
+  if (authLoading || work.loading) return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center">
       <div className="space-y-3 text-center">
         <div className="w-10 h-10 border-4 border-yellow-400 border-t-transparent rounded-full animate-spin mx-auto" />
@@ -386,41 +342,27 @@ export default function Dashboard() {
 
   if (!profile) return null;
 
-  if (loadFailed && !hasData) return (
-    <div className="min-h-screen bg-gray-50">
-      <Header userName={profile.full_name} role={profile.role} />
-      <div className="card max-w-xl mx-4 sm:mx-auto mt-6 space-y-3" role="alert">
-        <p>No se pudieron cargar los pendientes de hoy.</p>
-        <div className="flex flex-wrap gap-2">
-          <button className="btn-secondary" onClick={loadData}>Reintentar</button>
-          <Link href="/dashboard/huevos" className="btn-primary">Registrar recolección</Link>
-        </div>
-      </div>
-    </div>
-  );
-
-  const manualDailyTasks = dailyTasks.filter(t => !isEggWorkflowTask(t));
-  const manualPeriodicTasks = periodicTasks.filter(t => !isEggWorkflowTask(t));
-  const manualCustomTasks = customTasks.filter(t => !isEggWorkflowTask(t));
-  const hiddenEggTasks =
-    dailyTasks.length + periodicTasks.length + customTasks.length -
-    manualDailyTasks.length - manualPeriodicTasks.length - manualCustomTasks.length;
+  const hasLiveData = online && hasData;
+  const manualTasks = tasks.filter(task => !isEggWorkflowTask(task));
+  const manualDailyTasks = manualTasks.filter(task => task.type === 'daily');
+  const manualPeriodicTasks = manualTasks.filter(task => task.type === 'periodic');
+  const manualCustomTasks = manualTasks.filter(task => task.type === 'custom');
+  const hiddenEggTasks = tasks.length - manualTasks.length;
   const eggDone = recoleccionHoy && bandejasPorEmpacar <= 0;
   const eggRequired = !isSunday(today) || recoleccionHoy || bandejasPorEmpacar > 0;
   const treatmentDoneCount = activeTreatments.filter(t => confirmedTreatments.includes(t.id)).length;
   const eggDisplayDone = !eggRequired || eggDone;
-  const systemTotal = 1 + activeTreatments.length;
-  const systemDone = (eggDisplayDone ? 1 : 0) + treatmentDoneCount;
-  const eggSectionTotal = 1;
-  const eggSectionDone = eggDisplayDone ? 1 : 0;
+  const systemTotal = hasLiveData ? 1 + activeTreatments.length : 0;
+  const systemDone = hasLiveData ? (eggDisplayDone ? 1 : 0) + treatmentDoneCount : 0;
+  const eggSectionTotal = hasLiveData ? 1 : 0;
+  const eggSectionDone = hasLiveData && eggDisplayDone ? 1 : 0;
   const manualDailyDone = manualDailyTasks.filter(t => completedIds.includes(t.id)).length;
   const hoyHechas = eggSectionDone + manualDailyDone;
   const hoyTotal = eggSectionTotal + manualDailyTasks.length;
   // Progreso del día (anillo): pendientes del sistema + tareas manuales.
-  const todasLasTareas = [...manualDailyTasks, ...manualPeriodicTasks, ...manualCustomTasks];
-  const todasHechas = todasLasTareas.filter(t => completedIds.includes(t.id)).length;
+  const todasHechas = manualTasks.filter(t => completedIds.includes(t.id)).length;
   const cosasHechas = todasHechas + systemDone;
-  const cosasTotal = todasLasTareas.length + systemTotal;
+  const cosasTotal = manualTasks.length + systemTotal;
   const restan = cosasTotal - cosasHechas;
   const feedItems = stockItems.filter(i => i.is_feed);
   const otherItems = stockItems.filter(i => !i.is_feed);
@@ -450,6 +392,7 @@ export default function Dashboard() {
           {task.type === 'periodic' && task.frequency_days && (
             <span className="block text-xs text-gray-400 mt-0.5">Cada {task.frequency_days} días</span>
           )}
+          {pendingTasks.has(task.id) && <span className="block text-xs text-amber-700 mt-0.5">Pendiente de sincronizar</span>}
         </span>
         {showUrgent && <span className="badge-urgent shrink-0">Urgente</span>}
       </button>
@@ -457,6 +400,13 @@ export default function Dashboard() {
   };
 
   const renderEggSystemItem = () => {
+    if (!hasLiveData) return (
+      <Link href="/dashboard/huevos" className="flex items-center gap-3 p-4 rounded-2xl border bg-yellow-50 border-yellow-200">
+        <Egg className="w-6 h-6 text-yellow-700 shrink-0" />
+        <span className="font-semibold text-yellow-900 flex-1">Cargar huevos de hoy</span>
+        <ChevronRight className="w-5 h-5 text-yellow-600" />
+      </Link>
+    );
     if (!eggRequired) {
       return (
         <Link href="/dashboard/huevos"
@@ -524,20 +474,31 @@ export default function Dashboard() {
       <ToastViewport toast={toast} onClose={hideToast} />
 
       <div className="max-w-xl mx-auto px-4 py-6 space-y-6">
-        {loadFailed && <p className="card text-sm text-amber-800" role="alert">No pudimos actualizar los datos. <button className="underline" onClick={loadData}>Reintentar</button></p>}
+        {online && loadFailed && <p className="card text-sm text-amber-800" role="alert">No pudimos actualizar los datos en vivo. <button className="underline" onClick={loadData}>Reintentar</button></p>}
+        {online && work.failed && <p className="card text-sm text-amber-800" role="alert">No pudimos actualizar las tareas y las bocas. <button className="underline" onClick={work.refresh}>Reintentar</button></p>}
+        {!online && (
+          <p className="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+            {work.available
+              ? 'Podés marcar tareas y registrar bajas. Las cargas se sincronizan cuando vuelva la señal.'
+              : 'Abrí Inicio con conexión para preparar tus tareas y bocas en este dispositivo.'}
+          </p>
+        )}
 
         {/* Progreso del día */}
         <div className="bg-white rounded-2xl border border-gray-200 p-4 flex items-center gap-4">
-          <ProgressRing done={cosasHechas} total={cosasTotal} />
+          {work.available && <ProgressRing done={cosasHechas} total={cosasTotal} />}
           <div className="flex-1 min-w-0">
             <h2 className="text-lg font-bold text-gray-900 truncate">Hola, {profile.full_name}</h2>
             <p className="text-xs text-gray-400 mt-0.5 capitalize">
               {now.toLocaleDateString('es-AR', { weekday: 'long', day: 'numeric', month: 'long' })}
               {totalAvesActivas > 0 && ` · ${totalAvesActivas} aves`}
             </p>
-            <p className="text-sm text-gray-600 mt-1.5">
-              {restan > 0 ? `Te queda${restan > 1 ? 'n' : ''} ${restan} cosa${restan > 1 ? 's' : ''} por hacer hoy` : '¡Todo hecho por hoy! 🎉'}
-            </p>
+            {work.available && (
+              <p className="text-sm text-gray-600 mt-1.5">
+                {restan > 0 ? `Te queda${restan > 1 ? 'n' : ''} ${restan} cosa${restan > 1 ? 's' : ''} por hacer hoy`
+                  : hasLiveData ? '¡Todo hecho por hoy! 🎉' : 'Tareas al día'}
+              </p>
+            )}
           </div>
         </div>
 
@@ -545,7 +506,7 @@ export default function Dashboard() {
         <div>
           <div className="flex items-center justify-between mb-3">
             <h3 className="font-semibold text-gray-700 text-sm uppercase tracking-wide">Pendientes de hoy</h3>
-            <span className="text-xs text-gray-400">{hoyHechas} de {hoyTotal} hechas</span>
+            {work.available && <span className="text-xs text-gray-400">{hoyHechas} de {hoyTotal} hechas</span>}
           </div>
           <div className="space-y-2">
             {renderEggSystemItem()}
@@ -559,7 +520,7 @@ export default function Dashboard() {
         </div>
 
         {/* ── Tratamientos activos ── */}
-        {activeTreatments.length > 0 && (
+        {hasLiveData && activeTreatments.length > 0 && (
           <div>
             <div className="flex items-center gap-2 mb-3">
               <FlaskConical className="w-4 h-4 text-blue-500" />
@@ -685,12 +646,12 @@ export default function Dashboard() {
         </div>
 
         {/* ── Baja rápida (plegada) ── */}
-        {user && (
-          <BajaRapida slots={slots} lots={lots} userId={user.id} today={today} onSaved={loadData} collapsible />
+        {user && work.available && (
+          <BajaRapida slots={slots} lots={lots} userId={user.id} collapsible />
         )}
 
         {/* Insumos */}
-        <div>
+        <div hidden={!hasLiveData}>
           <div className="flex items-center justify-between mb-3">
             <h3 className="font-semibold text-gray-700 text-sm uppercase tracking-wide">Insumos</h3>
             {stockSaved && <span className="text-green-600 text-xs font-medium">✓ Guardado</span>}

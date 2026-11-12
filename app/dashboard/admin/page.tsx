@@ -12,6 +12,7 @@ import { getToday, toDateStr } from '@/lib/date';
 import { ToastViewport, useToast } from '@/components/Feedback';
 import { assertSupabaseAllOk, getErrorMessage } from '@/lib/supabase-ops';
 import { RECOLECCION_SYNCED } from '@/lib/offline-sync';
+import { WORK_SYNCED } from '@/lib/trabajo';
 import { procesarBandejaFertil } from '@/lib/egg-operations';
 import {
   TrendingUp, Package, Heart, ClipboardList, BarChart2,
@@ -214,7 +215,11 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     window.addEventListener(RECOLECCION_SYNCED, load);
-    return () => window.removeEventListener(RECOLECCION_SYNCED, load);
+    window.addEventListener(WORK_SYNCED, load);
+    return () => {
+      window.removeEventListener(RECOLECCION_SYNCED, load);
+      window.removeEventListener(WORK_SYNCED, load);
+    };
   }, [load]);
 
   // ── Procesar bandeja fértil ─────────────────────────────────────────────────
@@ -539,7 +544,7 @@ export default function AdminDashboard() {
 
         {/* ── Baja rápida ── */}
         {user && (
-          <BajaRapida slots={slots} lots={lots} userId={user.id} today={today} onSaved={load} />
+          <BajaRapida slots={slots} lots={lots} userId={user.id} />
         )}
 
       </div>
