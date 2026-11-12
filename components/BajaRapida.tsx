@@ -2,8 +2,9 @@
 
 import { useState } from 'react';
 import { ChevronDown } from 'lucide-react';
-import { supabase } from '@/lib/supabase';
-import { assertSupabaseAllOk, getErrorMessage } from '@/lib/supabase-ops';
+import { getErrorMessage } from '@/lib/supabase-ops';
+import { guardarTrabajo } from '@/lib/offline-sync';
+import { getToday } from '@/lib/date';
 import {
   ROWS,
   LOSS_TYPE_LABELS,
@@ -16,14 +17,11 @@ type Props = {
   slots: QuickSlot[];
   lots: QuickLot[];
   userId: string;
-  today: string;
-  /** Se llama tras guardar una baja, para que la página recargue sus datos. */
-  onSaved: () => void | Promise<void>;
   /** Si es true, arranca plegada y la cabecera funciona como botón para abrir/cerrar. */
   collapsible?: boolean;
 };
 
-export default function BajaRapida({ slots, lots, userId, today, onSaved, collapsible = false }: Props) {
+export default function BajaRapida({ slots, lots, userId, collapsible = false }: Props) {
   const [open, setOpen] = useState(!collapsible);
   const [quickRow, setQuickRow] = useState('');
   const [quickNum, setQuickNum] = useState('');
@@ -34,7 +32,7 @@ export default function BajaRapida({ slots, lots, userId, today, onSaved, collap
   const [quickQty, setQuickQty] = useState(1);
   const [quickReason, setQuickReason] = useState('');
   const [savingQuick, setSavingQuick] = useState(false);
-  const [quickSaved, setQuickSaved] = useState(false);
+  const [quickSaved, setQuickSaved] = useState<'online' | 'pending' | null>(null);
 
   const handleQuickLookup = () => {
     setQuickError('');
@@ -46,6 +44,7 @@ export default function BajaRapida({ slots, lots, userId, today, onSaved, collap
     if (!slot) { setQuickError(`La boca ${code} no existe o no tiene aves`); return; }
     if (slot.quantity === 0) { setQuickError(`La boca ${code} está vacía`); return; }
     const lot = lots.find(l => l.id === slot.lot_id) || null;
+    if (!lot) { setQuickError(`La boca ${code} no pertenece a un lote activo`); return; }
     setQuickSlot(slot);
     setQuickLot(lot);
     setQuickQty(1);
@@ -54,39 +53,28 @@ export default function BajaRapida({ slots, lots, userId, today, onSaved, collap
   };
 
   const handleQuickLoss = async () => {
-    if (!quickSlot || !quickLot) return;
+    if (!quickSlot || !quickLot || savingQuick) return;
+    const currentSlot = slots.find(slot => slot.id === quickSlot.id && slot.lot_id === quickLot.id);
+    if (!currentSlot || !Number.isInteger(quickQty) || quickQty < 1 || currentSlot.quantity < quickQty) {
+      setQuickError('Revisá la cantidad disponible en esta boca antes de guardar.');
+      return;
+    }
     setSavingQuick(true);
     setQuickError('');
-    const newQty = quickSlot.quantity - quickQty;
-    let ok = false;
     try {
-      assertSupabaseAllOk(await Promise.all([
-        supabase.from('lot_losses').insert({
-          lot_id: quickLot.id, date: today, quantity: quickQty,
-          reason: quickReason || null, slot_code: quickSlot.slot_code,
-          loss_type: quickLossType, user_id: userId,
-        }),
-        supabase.from('lots').update({ current_quantity: quickLot.current_quantity - quickQty }).eq('id', quickLot.id),
-        newQty === 0
-          ? supabase.from('cage_slots').delete().eq('id', quickSlot.id)
-          : supabase.from('cage_slots').update({ quantity: newQty }).eq('id', quickSlot.id),
-      ]));
-      ok = true;
+      const result = await guardarTrabajo('baja', {
+        lot_id: quickLot.id, slot_id: quickSlot.id, slot_code: quickSlot.slot_code,
+        date: getToday(), quantity: quickQty, reason: quickReason.trim() || null,
+        loss_type: quickLossType, user_id: userId,
+      });
+      resetQuick();
+      setQuickSaved(result);
+      setTimeout(() => setQuickSaved(null), 3000);
     } catch (error) {
       setQuickError(getErrorMessage(error, 'No se pudo guardar la baja. Probá de nuevo.'));
     } finally {
       setSavingQuick(false);
     }
-    if (!ok) return;
-    setQuickSlot(null);
-    setQuickLot(null);
-    setQuickRow('');
-    setQuickNum('');
-    setQuickReason('');
-    setQuickQty(1);
-    setQuickSaved(true);
-    setTimeout(() => setQuickSaved(false), 3000);
-    await onSaved();
   };
 
   const resetQuick = () => {
@@ -99,7 +87,7 @@ export default function BajaRapida({ slots, lots, userId, today, onSaved, collap
   const Title = (
     <div className="flex items-center gap-2">
       <span className="text-sm font-bold text-gray-700">Registrar baja rápida</span>
-      {quickSaved && <span className="text-[10px] font-black text-green-600 bg-green-100 px-2 py-0.5 rounded-full">✓ Guardado</span>}
+      {quickSaved && <span role="status" className="text-[10px] font-black text-green-700 bg-green-100 px-2 py-0.5 rounded-full">{quickSaved === 'pending' ? 'Guardada en el dispositivo' : 'Baja registrada'}</span>}
     </div>
   );
 
@@ -196,7 +184,7 @@ export default function BajaRapida({ slots, lots, userId, today, onSaved, collap
             <div className="flex items-center gap-3">
               <button onClick={() => setQuickQty(q => Math.max(1, q - 1))}
                 className="w-11 h-11 rounded-2xl bg-gray-100 hover:bg-gray-200 font-black text-xl flex items-center justify-center transition-colors">−</button>
-              <input type="number" min={1} max={quickSlot.quantity} value={quickQty}
+              <input type="number" aria-label="Cantidad de aves" min={1} max={quickSlot.quantity} value={quickQty}
                 onChange={e => setQuickQty(Math.min(quickSlot.quantity, Math.max(1, Number(e.target.value))))}
                 className="input-base text-center text-2xl font-black h-11 py-0" />
               <button onClick={() => setQuickQty(q => Math.min(quickSlot.quantity, q + 1))}

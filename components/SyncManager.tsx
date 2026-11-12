@@ -5,14 +5,14 @@ import { usePathname } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { useOnlineStatus } from '@/lib/connection';
 import { QUEUE_EVENT } from '@/lib/offline-queue';
-import { flushQueue, getPendingRecolecciones } from '@/lib/offline-sync';
+import { flushQueue, getPendingOperations } from '@/lib/offline-sync';
 
 export default function SyncManager() {
   const { user, profile } = useAuth();
   const userId = user?.id;
   const pathname = usePathname();
   const online = useOnlineStatus();
-  const [status, setStatus] = useState<{ userId: string; pending: number; blocked: boolean } | null>(null);
+  const [status, setStatus] = useState<{ userId: string; pending: number; issue: string | null } | null>(null);
 
   useEffect(() => {
     if (!userId) return;
@@ -30,13 +30,13 @@ export default function SyncManager() {
       try {
         do {
           requested = false;
-          const pending = (await getPendingRecolecciones(userId)).length;
+          const pending = await getPendingOperations(userId);
           if (!mounted) return;
-          setStatus(previous => ({ userId, pending, blocked: previous?.userId === userId && previous.blocked }));
-          if (!navigator.onLine || pending === 0) continue;
-          const result = await flushQueue(userId);
-          const remaining = (await getPendingRecolecciones(userId)).length;
-          if (mounted) setStatus({ userId, pending: remaining, blocked: result === 'blocked' });
+          setStatus({ userId, pending: pending.length, issue: pending.find(item => item.sync_error)?.sync_error ?? null });
+          if (!navigator.onLine || pending.length === 0) continue;
+          await flushQueue(userId);
+          const remaining = await getPendingOperations(userId);
+          if (mounted) setStatus({ userId, pending: remaining.length, issue: remaining.find(item => item.sync_error)?.sync_error ?? null });
         } while (requested && mounted);
       } catch (error) {
         console.error('No se pudo consultar la sincronización local:', error);
@@ -63,16 +63,16 @@ export default function SyncManager() {
   }, [userId]);
 
   const pending = status?.userId === userId ? status?.pending ?? 0 : 0;
-  const blocked = !!status?.blocked && status.userId === userId && pending > 0;
+  const issue = status?.userId === userId ? status?.issue : null;
   if (!profile || !pathname.startsWith('/dashboard') || (online && pending === 0)) return null;
 
   return (
     <div role="status" className="fixed bottom-20 inset-x-4 z-40 mx-auto w-fit max-w-[calc(100%-2rem)] rounded-2xl border border-amber-300 bg-amber-100 px-3 py-1.5 text-center text-xs font-medium text-amber-900 shadow-lg">
       {!online && <span>Sin conexión{pending > 0 ? ' · ' : ''}</span>}
       {pending > 0 && <span>{pending} pendiente{pending > 1 ? 's' : ''} de sincronizar</span>}
-      {blocked && online && (
+      {issue && online && (
         <div>
-          <span>Hay recolecciones que requieren revisión.</span>{' '}
+          <span>{issue}</span>{' '}
           <button type="button" className="font-bold underline" onClick={() => window.dispatchEvent(new Event(QUEUE_EVENT))}>
             Reintentar
           </button>

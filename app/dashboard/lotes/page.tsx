@@ -1,9 +1,8 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/contexts/AuthContext';
-import { useVisibilityReload } from '@/lib/visibility-reload';
 import Header from '@/components/Header';
 import { useRouter } from 'next/navigation';
 import { ToastViewport, useToast } from '@/components/Feedback';
@@ -12,41 +11,20 @@ import { getFlag, FLAG_COLAB_LOTES } from '@/lib/settings';
 import ReorderModal from '@/components/ReorderModal';
 import AgregarTandaModal from '@/components/AgregarTandaModal';
 import NuevoLoteForm from '@/components/NuevoLoteForm';
+import { getToday } from '@/lib/date';
+import { useOnlineStatus } from '@/lib/connection';
+import { LOSS_TYPE_LABELS, ROWS, type LossType, type QuickSlot as CageSlot } from '@/lib/domain';
+import { guardarTrabajo } from '@/lib/offline-sync';
+import { useTrabajo } from '@/lib/use-trabajo';
+import type { WorkLot as Lot } from '@/lib/trabajo';
 import {
   X, ChevronDown, ChevronUp, Skull, Plus,
   AlertCircle, ArrowLeftRight,
 } from 'lucide-react';
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-type LossType = 'muerte' | 'descarte' | 'venta';
-
-type Lot = {
-  id: number;
-  code: string;
-  start_date: string;
-  initial_quantity: number;
-  current_quantity: number;
-  status: string;
-};
-
-type CageSlot = {
-  id: number;
-  lot_id: number;
-  slot_code: string;
-  quantity: number;
-};
-
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const ROWS = ['A', 'B', 'C', 'D', 'E', 'F'];
 const TOTAL_COLS = 42;
-
-const LOSS_TYPE_LABELS: Record<LossType, string> = {
-  muerte: 'Muerte',
-  descarte: 'Descarte',
-  venta: 'Venta',
-};
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -129,7 +107,7 @@ function SlotGrid({
                 : !interactive || slot.quantity === 0;
 
               return (
-                <button key={code} disabled={isDisabled} onClick={() => onSlotPress?.(slot)}
+                <button key={code} disabled={isDisabled} onClick={() => onSlotPress?.(slot)} aria-label={`Boca ${code}, ${slot.quantity} aves`}
                   className={`w-7 h-7 rounded border text-[9px] font-black transition-all ${getSlotStyle(slot)}`}
                   title={`${code}: ${slot.quantity} aves`}>
                   {slot.quantity}
@@ -183,7 +161,7 @@ function LossModal({
   const [saving, setSaving] = useState(false);
 
   const handle = async () => {
-    if (qty < 1 || qty > slot.quantity) return;
+    if (saving || !Number.isInteger(qty) || qty < 1 || qty > slot.quantity) return;
     setSaving(true);
     await onConfirm(qty, reason, lossType);
     setSaving(false);
@@ -231,7 +209,7 @@ function LossModal({
           <div className="flex items-center gap-3 mt-2">
             <button onClick={() => setQty(q => Math.max(1, q - 1))}
               className="w-11 h-11 rounded-2xl bg-gray-100 hover:bg-gray-200 font-black text-xl flex items-center justify-center transition-colors">−</button>
-            <input type="number" min={1} max={slot.quantity} value={qty}
+            <input type="number" aria-label="Cantidad de aves" min={1} max={slot.quantity} value={qty}
               onChange={e => setQty(Math.min(slot.quantity, Math.max(1, Number(e.target.value))))}
               className="input-base text-center text-2xl font-black h-11 py-0" />
             <button onClick={() => setQty(q => Math.min(slot.quantity, q + 1))}
@@ -270,12 +248,14 @@ function LotCard({
   slots: CageSlot[];
   freeSlots: string[];
   onLoss: (slot: CageSlot) => void;
-  onReorder: (origin: CageSlot, destination: CageSlot, isNewSlot: boolean) => void;
+  onReorder?: (origin: CageSlot, destination: CageSlot, isNewSlot: boolean) => void;
   onAddTanda?: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [reorderMode, setReorderMode] = useState(false);
   const [originSlot, setOriginSlot] = useState<CageSlot | null>(null);
+  const canReorder = !!onReorder;
+  const moving = canReorder && reorderMode;
 
   const totalAves = slots.reduce((s, sl) => s + sl.quantity, 0);
   const activeSlots = slots.filter(s => s.quantity > 0).length;
@@ -283,6 +263,7 @@ function LotCard({
   const survivalColor = pctSupervivencia > 90 ? 'bg-emerald-400' : pctSupervivencia > 75 ? 'bg-yellow-400' : 'bg-red-400';
 
   const handleSlotPressReorder = (slot: CageSlot) => {
+    if (!onReorder) return;
     if (slot.id === -1) {
       if (originSlot) { onReorder(originSlot, slot, true); setOriginSlot(null); }
       return;
@@ -353,7 +334,7 @@ function LotCard({
           {expanded && (
             <div className="px-5 pb-5 pt-2">
               <div className="flex items-center justify-between mb-3">
-                {reorderMode ? (
+                {moving ? (
                   <div className="flex items-center gap-2">
                     <span className="text-[10px] font-bold text-blue-600 uppercase">
                       {originSlot ? `Origen: ${originSlot.slot_code} — tocá destino` : 'Tocá la boca origen'}
@@ -363,21 +344,21 @@ function LotCard({
                 ) : (
                   <p className="text-[10px] text-gray-400 font-medium">Tocá una boca para registrar una baja</p>
                 )}
-                <button onClick={() => reorderMode ? exitReorder() : setReorderMode(true)}
+                {canReorder && <button onClick={() => moving ? exitReorder() : setReorderMode(true)}
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all
-                    ${reorderMode ? 'bg-blue-100 text-blue-700 hover:bg-blue-200' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}>
+                    ${moving ? 'bg-blue-100 text-blue-700 hover:bg-blue-200' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}>
                   <ArrowLeftRight className="w-3 h-3" />
-                  {reorderMode ? 'Salir' : 'Reacomodar'}
-                </button>
+                  {moving ? 'Salir' : 'Reacomodar'}
+                </button>}
               </div>
 
               <SlotGrid
                 slots={slots}
-                onSlotPress={reorderMode ? handleSlotPressReorder : onLoss}
-                interactive={!reorderMode}
-                reorderMode={reorderMode}
+                onSlotPress={moving ? handleSlotPressReorder : onLoss}
+                interactive={!moving}
+                reorderMode={moving}
                 selectedOrigin={originSlot}
-                freeSlots={reorderMode && originSlot ? freeSlots : []}
+                freeSlots={moving && originSlot ? freeSlots : []}
               />
             </div>
           )}
@@ -392,9 +373,9 @@ function LotCard({
 export default function LotesColaboradora() {
   const { user, profile, loading: authLoading } = useAuth();
   const router = useRouter();
-
-  const [lots, setLots] = useState<Lot[]>([]);
-  const [slots, setSlots] = useState<CageSlot[]>([]);
+  const online = useOnlineStatus();
+  const work = useTrabajo(profile?.role === 'collaborator' ? user?.id : undefined, getToday());
+  const { lots, slots, refresh: loadData } = work;
 
   const [selectedSlot, setSelectedSlot] = useState<{ slot: CageSlot; lot: Lot } | null>(null);
   const [reorderPair, setReorderPair] = useState<{ origin: CageSlot; destination: CageSlot; isNewSlot: boolean } | null>(null);
@@ -402,73 +383,45 @@ export default function LotesColaboradora() {
   const [showNewLot, setShowNewLot] = useState(false);
   const [puedeGestionarLotes, setPuedeGestionarLotes] = useState(false);
 
-  const [loading, setLoading] = useState(false);
   const { toast, showToast, hideToast } = useToast();
-
-  const loadData = useCallback(async () => {
-    if (!navigator.onLine) return;
-    try {
-      const [lotsRes, slotsRes] = await Promise.all([
-        supabase.from('lots').select('*').eq('status', 'activo').order('start_date', { ascending: false }),
-        supabase.from('cage_slots').select('*'),
-      ]);
-      assertSupabaseAllOk([lotsRes, slotsRes]);
-      if (lotsRes.data) setLots(lotsRes.data);
-      if (slotsRes.data) setSlots(slotsRes.data);
-    } catch (error) {
-      console.error('Error cargando lotes:', error);
-      showToast('No se pudieron actualizar los lotes.', 'error');
-    } finally {
-      setLoading(false);
-    }
-  }, [showToast]);
 
   useEffect(() => {
     if (authLoading) return;
     if (!user || !profile) { router.push('/'); return; }
     if (profile.role === 'owner') { router.push('/dashboard/admin'); return; }
-    loadData();
-  }, [authLoading, user, profile, router, loadData]);
-
-  useVisibilityReload(loadData);
+  }, [authLoading, user, profile, router]);
 
   // Palanca del owner: habilita cargar/ampliar lotes para la colaboradora.
   useEffect(() => {
-    if (!user) return;
+    if (!user || !online) return;
     getFlag(FLAG_COLAB_LOTES).then(setPuedeGestionarLotes);
-  }, [user]);
+  }, [user, online]);
 
   const flash = (message: string) => showToast(message);
 
   const handleLoss = async (qty: number, reason: string, lossType: LossType) => {
     if (!selectedSlot || !user) return;
     const { slot, lot } = selectedSlot;
-    const newQty = slot.quantity - qty;
-    const today = new Date().toISOString().split('T')[0];
+    const currentSlot = slots.find(item => item.id === slot.id && item.lot_id === lot.id);
+    if (!currentSlot || !Number.isInteger(qty) || qty < 1 || qty > currentSlot.quantity) {
+      showToast('Revisá la cantidad disponible en esta boca antes de guardar.', 'error');
+      return;
+    }
 
     try {
-      const results = await Promise.all([
-        supabase.from('lot_losses').insert({
-          lot_id: lot.id, date: today, quantity: qty,
-          reason: reason || null, slot_code: slot.slot_code,
-          loss_type: lossType, user_id: user.id,
-        }),
-        supabase.from('lots').update({ current_quantity: lot.current_quantity - qty }).eq('id', lot.id),
-        newQty === 0
-          ? supabase.from('cage_slots').delete().eq('id', slot.id)
-          : supabase.from('cage_slots').update({ quantity: newQty }).eq('id', slot.id),
-      ]);
-      assertSupabaseAllOk(results, 'No se pudo registrar la baja.');
+      const result = await guardarTrabajo('baja', {
+        lot_id: lot.id, slot_id: slot.id, slot_code: slot.slot_code, date: getToday(),
+        quantity: qty, reason: reason.trim() || null, loss_type: lossType, user_id: user.id,
+      });
       setSelectedSlot(null);
-      flash('Baja registrada');
-      await loadData();
+      flash(result === 'pending' ? 'Baja guardada en el dispositivo' : 'Baja registrada');
     } catch (error) {
       showToast(getErrorMessage(error, 'No se pudo registrar la baja.'), 'error');
     }
   };
 
   const handleReorder = async (qty: number) => {
-    if (!reorderPair) return;
+    if (!reorderPair || !navigator.onLine) return;
     const { origin, destination, isNewSlot } = reorderPair;
     const newOriginQty = origin.quantity - qty;
 
@@ -491,7 +444,7 @@ export default function LotesColaboradora() {
   };
 
   const handleAgregarTanda = async (lot: Lot, nuevos: { slot_code: string; quantity: number }[]) => {
-    if (!user || nuevos.length === 0) return;
+    if (!user || !navigator.onLine || nuevos.length === 0) return;
     const total = nuevos.reduce((s, x) => s + x.quantity, 0);
     try {
       assertSupabaseOk(await supabase.from('cage_slots').insert(nuevos.map(s => ({ lot_id: lot.id, slot_code: s.slot_code, quantity: s.quantity }))));
@@ -508,7 +461,7 @@ export default function LotesColaboradora() {
   };
 
   const handleNewLot = async (data: { code: string; start_date: string; notes: string; slots: { slot_code: string; quantity: number }[] }) => {
-    if (!user) return;
+    if (!user || !navigator.onLine) return;
     const totalQty = data.slots.reduce((s, sl) => s + sl.quantity, 0);
     try {
       const { data: lotData } = assertSupabaseOk(await supabase.from('lots')
@@ -529,7 +482,7 @@ export default function LotesColaboradora() {
   const freeSlotCodes = allPossibleCodes.filter(c => !occupiedSlotCodes.has(c));
   const totalAves = slots.reduce((s, sl) => s + sl.quantity, 0);
 
-  if (authLoading || loading) return (
+  if (authLoading || work.loading) return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center">
       <div className="space-y-3 text-center">
         <div className="w-10 h-10 border-4 border-yellow-400 border-t-transparent rounded-full animate-spin mx-auto" />
@@ -550,6 +503,10 @@ export default function LotesColaboradora() {
         <div className="flex items-center justify-between">
           <h2 className="text-2xl font-black text-gray-900">Aves</h2>
         </div>
+        {online && work.failed && <p className="card text-sm text-amber-800" role="alert">No pudimos actualizar las bocas. <button className="underline" onClick={loadData}>Reintentar</button></p>}
+        {!online && <p className="rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+          {work.available ? 'Podés registrar bajas sin señal.' : 'Abrí Aves o Inicio con conexión para preparar la lista de bocas.'}
+        </p>}
 
         {/* Resumen */}
         {lots.length > 0 && (
@@ -567,11 +524,12 @@ export default function LotesColaboradora() {
           </div>
         )}
 
-        {lots.length === 0 ? (
+        {work.available && lots.length === 0 && (
           <div className="text-center py-12 text-gray-400">
             <p className="font-medium">No hay lotes activos</p>
           </div>
-        ) : (
+        )}
+        {lots.length > 0 && (
           <div className="space-y-4">
             {lots.map(lot => (
               <LotCard
@@ -580,14 +538,14 @@ export default function LotesColaboradora() {
                 slots={slots.filter(s => s.lot_id === lot.id)}
                 freeSlots={freeSlotCodes}
                 onLoss={slot => setSelectedSlot({ slot, lot })}
-                onReorder={(origin, destination, isNewSlot) => setReorderPair({ origin, destination, isNewSlot })}
-                onAddTanda={puedeGestionarLotes ? () => setTandaLot(lot) : undefined}
+                onReorder={online ? (origin, destination, isNewSlot) => setReorderPair({ origin, destination, isNewSlot }) : undefined}
+                onAddTanda={online && puedeGestionarLotes ? () => setTandaLot(lot) : undefined}
               />
             ))}
           </div>
         )}
 
-        {puedeGestionarLotes && (
+        {online && puedeGestionarLotes && (
           !showNewLot ? (
             <button onClick={() => setShowNewLot(true)}
               className="w-full py-5 rounded-3xl border-2 border-dashed border-gray-200 text-gray-400 hover:border-yellow-400 hover:text-yellow-600 hover:bg-yellow-50/50 transition-all flex items-center justify-center gap-3 font-bold">
@@ -604,12 +562,12 @@ export default function LotesColaboradora() {
           onClose={() => setSelectedSlot(null)} onConfirm={handleLoss} />
       )}
 
-      {reorderPair && (
+      {online && reorderPair && (
         <ReorderModal origin={reorderPair.origin} destination={reorderPair.destination}
           isNewSlot={reorderPair.isNewSlot} onClose={() => setReorderPair(null)} onConfirm={handleReorder} />
       )}
 
-      {tandaLot && (
+      {online && tandaLot && (
         <AgregarTandaModal lot={tandaLot} occupiedSlots={occupiedSlotCodes}
           onClose={() => setTandaLot(null)} onConfirm={slots => handleAgregarTanda(tandaLot, slots)} />
       )}

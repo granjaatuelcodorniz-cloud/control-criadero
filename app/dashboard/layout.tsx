@@ -10,7 +10,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const { user, profile, error, retry } = useAuth();
   const pathname = usePathname();
   const online = useOnlineStatus();
-  const offline = !online && !!profile && pathname !== '/dashboard/huevos';
+  const collaboratorWork = profile?.role === 'collaborator' && (pathname === '/dashboard' || pathname === '/dashboard/lotes');
+  const offline = !online && !!profile && pathname !== '/dashboard/huevos' && !collaboratorWork;
 
   if (error) return (
     <main className="max-w-xl mx-auto p-6" role="alert">

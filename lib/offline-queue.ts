@@ -5,7 +5,7 @@ const storeName = 'mutations';
 
 export const QUEUE_EVENT = 'atuel-queue-changed';
 
-type Mutation = { id: string; kind: string; payload: unknown; created_at: number };
+type Mutation = { id: string; kind: string; payload: unknown; created_at: number; sync_error?: string };
 export type QueuedMutation = Mutation & { database: string };
 
 export function nuevoId(): string {
@@ -51,7 +51,7 @@ async function run<T>(database: string, mode: IDBTransactionMode, action: (store
 }
 
 export async function enqueue(kind: string, payload: unknown): Promise<void> {
-  const item: Mutation = { id: nuevoId(), kind, payload, created_at: Date.now() };
+  const item: Mutation = { id: nuevoId(), kind, payload, created_at: performance.timeOrigin + performance.now() };
   await run(currentDb, 'readwrite', store => store.add(item));
   window.dispatchEvent(new Event(QUEUE_EVENT));
 }
@@ -67,4 +67,19 @@ export async function getAll(): Promise<QueuedMutation[]> {
 export async function remove(item: QueuedMutation): Promise<void> {
   await run(item.database, 'readwrite', store => store.delete(item.id));
   window.dispatchEvent(new Event(QUEUE_EVENT));
+}
+
+export async function markSyncError(item: QueuedMutation, message: string): Promise<void> {
+  let changed = false;
+  await run<Mutation | undefined>(item.database, 'readwrite', store => {
+    const request = store.get(item.id);
+    request.addEventListener('success', () => {
+      const current = request.result as Mutation | undefined;
+      if (!current || current.sync_error === message) return;
+      store.put({ ...current, sync_error: message });
+      changed = true;
+    });
+    return request;
+  });
+  if (changed) window.dispatchEvent(new Event(QUEUE_EVENT));
 }
