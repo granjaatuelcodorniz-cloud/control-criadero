@@ -1,12 +1,8 @@
-// Sincronización de la cola offline con Supabase.
-// Idempotencia: cada registro lleva un client_uuid único; si al reintentar ya existe
-// (violación de unique, código 23505), se considera ya sincronizado y se descarta.
-// Si la columna client_uuid todavía no existe en la base (42703), inserta sin ella.
-
 import { supabase } from '@/lib/supabase';
-import { enqueue, getAll, remove, nuevoId } from '@/lib/offline-queue';
+import { enqueue, getAll, remove, nuevoId, normalizeClientId, type QueuedMutation } from '@/lib/offline-queue';
+import { isConnectionError } from '@/lib/connection';
 
-export type RecoleccionPayload = {
+type RecoleccionPayload = {
   client_uuid: string;
   date: string;
   user_id: string;
@@ -16,79 +12,79 @@ export type RecoleccionPayload = {
   registered_at: string;
 };
 
-// Distingue "no hay señal / request cortada" de un error real de base de datos.
-export function isOfflineError(error: unknown): boolean {
-  if (typeof navigator !== 'undefined' && !navigator.onLine) return true;
-  const err = error as { message?: string; code?: string } | null;
-  if (err?.code) return false; // error de Postgres con código → NO es de red
-  const msg = (err?.message ?? '').toLowerCase();
-  return !msg || /fetch|network|failed|abort|timeout|conexi|offline/.test(msg);
+export const RECOLECCION_SYNCED = 'atuel-recoleccion-synced';
+
+export async function getPendingRecolecciones(userId: string) {
+  return (await getAll()).filter((item): item is QueuedMutation & { payload: RecoleccionPayload } => (
+    item.kind === 'recoleccion' && (item.payload as RecoleccionPayload | null)?.user_id === userId
+  ));
 }
 
-async function insertDaily(p: RecoleccionPayload, withUuid: boolean) {
-  const row: Record<string, unknown> = {
-    date: p.date,
-    user_id: p.user_id,
-    bandejas_consumo: p.bandejas_consumo,
-    bandejas_fertiles: p.bandejas_fertiles,
-    docenas_armadas: 0,
-    huevos_rotos: 0,
-    notas: p.notas,
-    registered_at: p.registered_at,
-  };
-  if (withUuid) row.client_uuid = p.client_uuid;
-  return supabase.from('daily_records').insert(row);
+async function applyRecoleccion(payload: RecoleccionPayload) {
+  const { error } = await supabase.rpc('registrar_recoleccion', {
+    p_client_uuid: await normalizeClientId(payload.client_uuid),
+    p_user_id: payload.user_id,
+    p_date: payload.date,
+    p_bandejas_consumo: payload.bandejas_consumo,
+    p_bandejas_fertiles: payload.bandejas_fertiles,
+    p_notas: payload.notas,
+    p_registered_at: payload.registered_at,
+  });
+  if (error) throw error;
 }
 
-async function applyRecoleccion(p: RecoleccionPayload) {
-  let res = await insertDaily(p, true);
-  if (res.error?.code === '42703') res = await insertDaily(p, false); // columna aún no creada
-  if (res.error) {
-    if (res.error.code === '23505') return; // ya sincronizado antes → ok
-    throw res.error;
-  }
-  if (p.bandejas_fertiles > 0) {
-    const { error } = await supabase.from('fertile_batches').insert(
-      Array.from({ length: p.bandejas_fertiles }, () => ({ date: p.date, user_id: p.user_id, status: 'pendiente' })),
-    );
-    if (error) throw error;
-  }
-}
-
-// Guarda la recolección: intenta online; si no hay señal, la mete en la cola.
-export async function guardarRecoleccion(p: Omit<RecoleccionPayload, 'client_uuid'>): Promise<'online' | 'offline'> {
-  const payload: RecoleccionPayload = { ...p, client_uuid: nuevoId() };
+export async function guardarRecoleccion(payload: Omit<RecoleccionPayload, 'client_uuid'>): Promise<'online' | 'pending'> {
+  const collection = { ...payload, client_uuid: nuevoId() };
   try {
-    await applyRecoleccion(payload);
+    await enqueue('recoleccion', collection);
+    return 'pending';
+  } catch {
+    if (!navigator.onLine) {
+      throw new Error('El navegador no pudo guardar la recolección en este dispositivo. Conservamos lo que ingresaste.');
+    }
+    await applyRecoleccion(collection);
     return 'online';
-  } catch (e) {
-    if (isOfflineError(e)) {
-      await enqueue('recoleccion', payload);
-      return 'offline';
-    }
-    throw e;
   }
 }
 
-let flushing = false;
+type SyncResult = 'waiting' | 'blocked' | 'done';
+const inProgress = new Map<string, Promise<SyncResult>>();
 
-// Vacía la cola hacia Supabase. Se detiene si vuelve a no haber señal (reintenta después).
-export async function flushQueue(): Promise<void> {
-  if (flushing) return;
-  if (typeof navigator !== 'undefined' && !navigator.onLine) return;
-  flushing = true;
+async function syncPending(userId: string): Promise<SyncResult> {
+  if (!navigator.onLine) return 'waiting';
+  let pending = await getPendingRecolecciones(userId);
+  if (pending.length === 0) return 'done';
+  const { data: { session } } = await supabase.auth.getSession();
+  if (session?.user.id !== userId) return 'waiting';
+
+  let blocked = false;
+  let synced = false;
+  const attempted = new Set<string>();
   try {
-    const items = await getAll();
-    for (const item of items) {
-      try {
-        if (item.kind === 'recoleccion') await applyRecoleccion(item.payload as RecoleccionPayload);
-        await remove(item.id);
-      } catch (e) {
-        if (isOfflineError(e)) break; // sin señal → dejamos el resto para después
-        break; // error inesperado → no perdemos el dato, reintenta luego
+    while (pending.length > 0) {
+      for (const item of pending) {
+        attempted.add(item.id);
+        try {
+          await applyRecoleccion(item.payload);
+          await remove(item);
+          synced = true;
+        } catch (error) {
+          if (!navigator.onLine || isConnectionError(error)) return 'waiting';
+          blocked = true;
+        }
       }
+      pending = (await getPendingRecolecciones(userId)).filter(item => !attempted.has(item.id));
     }
+    return blocked ? 'blocked' : 'done';
   } finally {
-    flushing = false;
+    if (synced) window.dispatchEvent(new Event(RECOLECCION_SYNCED));
   }
+}
+
+export function flushQueue(userId: string): Promise<SyncResult> {
+  const existing = inProgress.get(userId);
+  if (existing) return existing;
+  const run = syncPending(userId).finally(() => inProgress.delete(userId));
+  inProgress.set(userId, run);
+  return run;
 }

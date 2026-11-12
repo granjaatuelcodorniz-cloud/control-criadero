@@ -12,7 +12,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useVisibilityReload } from '@/lib/visibility-reload';
 import { useRouter } from 'next/navigation';
 import { ConfirmDialog, ToastViewport, useToast } from '@/components/Feedback';
-import { assertSupabaseOk, getErrorMessage } from '@/lib/supabase-ops';
+import { assertSupabaseAllOk, assertSupabaseOk, getErrorMessage } from '@/lib/supabase-ops';
 import { getToday, toDateStr } from '@/lib/date';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -222,6 +222,7 @@ export default function Sanidad() {
   const flash = (message: string) => showToast(message);
 
   const loadData = useCallback(async () => {
+    if (!navigator.onLine) return;
     try {
       const [recordsRes, lotsRes, slotsRes, productsRes, confirmRes] = await Promise.all([
         supabase.from('health_records').select('*').order('date', { ascending: false }),
@@ -230,6 +231,7 @@ export default function Sanidad() {
         supabase.from('health_products').select('*').order('name'),
         supabase.from('treatment_confirmations').select('record_id, date'),
       ]);
+      assertSupabaseAllOk([recordsRes, lotsRes, slotsRes, productsRes, confirmRes]);
       if (recordsRes.data) setRecords(recordsRes.data);
       if (lotsRes.data) setLots(lotsRes.data);
       if (slotsRes.data) setSlots(slotsRes.data);
@@ -237,10 +239,11 @@ export default function Sanidad() {
       if (confirmRes.data) setConfirmations(confirmRes.data);
     } catch (error) {
       console.error('Error cargando sanidad:', error);
+      showToast('No se pudo actualizar el historial de sanidad.', 'error');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [showToast]);
 
   useEffect(() => {
     if (authLoading) return;

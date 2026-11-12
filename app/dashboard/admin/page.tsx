@@ -7,8 +7,12 @@ import { useVisibilityReload } from '@/lib/visibility-reload';
 import { useRouter } from 'next/navigation';
 import Header from '@/components/Header';
 import BajaRapida from '@/components/BajaRapida';
-import Link from 'next/link';
+import Link from '@/components/AppLink';
 import { getToday, toDateStr } from '@/lib/date';
+import { ToastViewport, useToast } from '@/components/Feedback';
+import { assertSupabaseAllOk, getErrorMessage } from '@/lib/supabase-ops';
+import { RECOLECCION_SYNCED } from '@/lib/offline-sync';
+import { procesarBandejaFertil } from '@/lib/egg-operations';
 import {
   TrendingUp, Package, Heart, ClipboardList, BarChart2,
   AlertTriangle, CheckCircle, Clock, Egg, Activity,
@@ -65,7 +69,9 @@ export default function AdminDashboard() {
   const [weekRecords, setWeekRecords] = useState<DailyRecord[]>([]);
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [totalAves, setTotalAves] = useState(0);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [hasData, setHasData] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [slots, setSlots] = useState<CageSlot[]>([]);
   const [lots, setLots] = useState<Lot[]>([]);
 
@@ -75,8 +81,10 @@ export default function AdminDashboard() {
   const [batchDocenas, setBatchDocenas] = useState('');
   const [batchDescarte, setBatchDescarte] = useState('');
   const [savingBatch, setSavingBatch] = useState(false);
+  const { toast, showToast, hideToast } = useToast();
 
   const load = useCallback(async () => {
+    if (!navigator.onLine) return;
     try {
       const sevenDaysAgo = new Date();
       sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
@@ -97,8 +105,9 @@ export default function AdminDashboard() {
         supabase.from('stock_movements').select('stock_item_id, quantity')
           .eq('movement_type', 'salida').gte('date', sevenDaysAgoStr).lte('date', today),
       ]);
+      assertSupabaseAllOk([weekRes, empRes, fertileRes, slotsRes, lotsRes, stockRes, tasksRes, healthRes, batchesRes, weekFeedRes]);
 
-      if (fertileRes.data?.[0]) setTodayFertile(fertileRes.data[0]);
+      setTodayFertile(fertileRes.data?.[0] ?? null);
 
       // docenas/rotos ahora viven en consumo_empaque; las sumamos por fecha.
       const empByDate = new Map<string, { docenas: number; rotos: number }>();
@@ -184,7 +193,10 @@ export default function AdminDashboard() {
       if (newAlerts.length === 0) newAlerts.push({ type: 'ok', message: 'Todo en orden por ahora' });
       setAlerts(newAlerts);
       if (batchesRes.data) setPendingBatches(batchesRes.data);
+      setHasData(true);
+      setLoadFailed(false);
     } catch (error) {
+      setLoadFailed(true);
       console.error('Error cargando dashboard:', error);
     } finally {
       setLoading(false);
@@ -200,32 +212,27 @@ export default function AdminDashboard() {
 
   useVisibilityReload(load);
 
+  useEffect(() => {
+    window.addEventListener(RECOLECCION_SYNCED, load);
+    return () => window.removeEventListener(RECOLECCION_SYNCED, load);
+  }, [load]);
+
   // ── Procesar bandeja fértil ─────────────────────────────────────────────────
   const handleProcessBatch = async (batch: FertileBatch) => {
-    if (!batchDocenas || !user) return;
+    if (!batchDocenas || !user || savingBatch) return;
     setSavingBatch(true);
-    const processedDate = today;
-    await supabase.from('fertile_batches').update({
-      status: 'procesada',
-      docenas_seleccionadas: Number(batchDocenas),
-      descarte: Number(batchDescarte) || 0,
-      processed_at: processedDate,
-      processed_by: user.id,
-    }).eq('id', batch.id);
-    // También insertar en fertile_records para mantener compatibilidad con análisis
-    await supabase.from('fertile_records').insert({
-      date: batch.date,
-      user_id: user.id,
-      bandejas_procesadas: 1,
-      docenas_seleccionadas: Number(batchDocenas),
-      descarte: Number(batchDescarte) || 0,
-      registered_at: new Date().toTimeString().split(' ')[0],
-    });
-    setProcessingBatch(null);
-    setBatchDocenas('');
-    setBatchDescarte('');
-    setSavingBatch(false);
-    await load();
+    try {
+      await procesarBandejaFertil(batch.id, user.id, Number(batchDocenas), Number(batchDescarte) || 0);
+      setProcessingBatch(null);
+      setBatchDocenas('');
+      setBatchDescarte('');
+      showToast('Bandeja procesada');
+      await load();
+    } catch (error) {
+      showToast(getErrorMessage(error, 'No se pudo procesar la bandeja.'), 'error');
+    } finally {
+      setSavingBatch(false);
+    }
   };
 
   if (authLoading || loading) return (
@@ -235,6 +242,19 @@ export default function AdminDashboard() {
   );
 
   if (!profile) return null;
+
+  if (loadFailed && !hasData) return (
+    <div className="min-h-screen bg-gray-50">
+      <Header userName={profile.full_name} role={profile.role} />
+      <div className="card max-w-xl mx-4 sm:mx-auto mt-6 space-y-3" role="alert">
+        <p>No se pudo cargar el panel de producción.</p>
+        <div className="flex flex-wrap gap-2">
+          <button className="btn-secondary" onClick={load}>Reintentar</button>
+          <Link href="/dashboard/huevos" className="btn-primary">Registrar recolección</Link>
+        </div>
+      </div>
+    </div>
+  );
 
   const totalHuevosConsumo = todayRecord ? (todayRecord.docenas_armadas * 12) + todayRecord.huevos_rotos : 0;
   const pctPosturaConsumo = totalAves > 0 && totalHuevosConsumo > 0 ? Math.round((totalHuevosConsumo / totalAves) * 100) : null;
@@ -263,8 +283,10 @@ export default function AdminDashboard() {
   return (
     <div className="min-h-screen bg-gray-50">
       <Header userName={profile.full_name} role={profile.role} />
+      <ToastViewport toast={toast} onClose={hideToast} />
 
       <div className="max-w-2xl mx-auto px-4 py-6 space-y-6">
+        {loadFailed && <p className="card text-sm text-amber-800" role="alert">No pudimos actualizar el panel. <button className="underline" onClick={load}>Reintentar</button></p>}
 
         <div>
           <h2 className="text-2xl font-bold text-gray-900">Hola, {profile.full_name} 👋</h2>

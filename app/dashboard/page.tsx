@@ -6,9 +6,12 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useVisibilityReload } from '@/lib/visibility-reload';
 import Header from '@/components/Header';
 import BajaRapida from '@/components/BajaRapida';
-import Link from 'next/link';
+import Link from '@/components/AppLink';
 import { useRouter } from 'next/navigation';
 import { getToday, toDateStr } from '@/lib/date';
+import { ToastViewport, useToast } from '@/components/Feedback';
+import { assertSupabaseAllOk, assertSupabaseOk } from '@/lib/supabase-ops';
+import { RECOLECCION_SYNCED } from '@/lib/offline-sync';
 import {
   Egg, AlertTriangle, ClipboardList,
   Plus, X, FlaskConical, Check, ChevronRight, PackageCheck,
@@ -137,8 +140,13 @@ export default function Dashboard() {
   const [confirmStock, setConfirmStock] = useState<number | null>(null);
   const [showExtraTask, setShowExtraTask] = useState(false);
   const [extraTaskDesc, setExtraTaskDesc] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [hasData, setHasData] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [confirmingTreatment, setConfirmingTreatment] = useState<number | null>(null);
+  const [savingTask, setSavingTask] = useState(false);
+  const [savingExtraTask, setSavingExtraTask] = useState(false);
+  const { toast, showToast, hideToast } = useToast();
 
   const [today, setToday] = useState(getToday);
   const [now, setNow] = useState(() => new Date());
@@ -154,7 +162,7 @@ export default function Dashboard() {
   }, [today]);
 
   const loadData = useCallback(async () => {
-    if (!user) return;
+    if (!user || !navigator.onLine) return;
     try {
       // Limpiar tareas custom completadas en días anteriores
       const { data: oldCustomCompletions } = await supabase
@@ -189,6 +197,7 @@ export default function Dashboard() {
         supabase.from('daily_records').select('date, bandejas_consumo').gte('date', desde14),
         supabase.from('consumo_empaque').select('date, bandejas').gte('date', desde14),
       ]);
+      assertSupabaseAllOk([tasksRes, completionsRes, slotsRes, stockRes, recordsRes, productsRes, lotsRes, confirmRes, recRes, empRes]);
 
       // Estado de huevos: ¿se cargó recolección hoy? ¿cuántas bandejas faltan empacar?
       const recRows = recRes.data ?? [];
@@ -214,7 +223,6 @@ export default function Dashboard() {
       if (lotsRes.data) setLots(lotsRes.data);
       if (slotsRes.data) setSlots(slotsRes.data);
       if (confirmRes.data) setConfirmedTreatments(confirmRes.data.map(c => c.record_id));
-      if (recordsRes.error) console.error('Error cargando tratamientos en dashboard colaborador:', recordsRes.error);
 
       // Filtrar tratamientos activos hoy — comparacion de strings evita bugs de timezone
       if (recordsRes.data) {
@@ -229,7 +237,10 @@ export default function Dashboard() {
         });
         setActiveTreatments(active);
       }
+      setHasData(true);
+      setLoadFailed(false);
     } catch (error) {
+      setLoadFailed(true);
       console.error('Error cargando dashboard colaborador:', error);
     } finally {
       setLoading(false);
@@ -245,60 +256,82 @@ export default function Dashboard() {
 
   useVisibilityReload(loadData);
 
+  useEffect(() => {
+    window.addEventListener(RECOLECCION_SYNCED, loadData);
+    return () => window.removeEventListener(RECOLECCION_SYNCED, loadData);
+  }, [loadData]);
+
   // ── Toggle tarea ────────────────────────────────────────────────────────────
   const toggleTask = async (task: Task) => {
-    if (!user) return;
+    if (!user || savingTask) return;
+    setSavingTask(true);
     const isDone = completedIds.includes(task.id);
-    if (isDone) {
-      await supabase.from('task_completions').delete()
-        .eq('task_id', task.id).eq('user_id', user.id).eq('date', today);
-      setCompletedIds(prev => prev.filter(id => id !== task.id));
-    } else {
-      await supabase.from('task_completions').insert({ task_id: task.id, user_id: user.id, completed: true, date: today });
-      if (task.type === 'periodic' && task.frequency_days) {
-        const next = new Date(today);
-        next.setDate(next.getDate() + task.frequency_days);
-        await supabase.from('tasks').update({ next_execution: toDateStr(next), is_urgent: false }).eq('id', task.id);
+    try {
+      if (isDone) {
+        assertSupabaseOk(await supabase.from('task_completions').delete()
+          .eq('task_id', task.id).eq('user_id', user.id).eq('date', today));
+        setCompletedIds(prev => prev.filter(id => id !== task.id));
+      } else {
+        assertSupabaseOk(await supabase.from('task_completions').insert({ task_id: task.id, user_id: user.id, completed: true, date: today }));
+        setCompletedIds(prev => [...prev, task.id]);
+        if (task.type === 'periodic' && task.frequency_days) {
+          const next = new Date(`${today}T12:00:00`);
+          next.setDate(next.getDate() + task.frequency_days);
+          const { error } = await supabase.from('tasks').update({ next_execution: toDateStr(next), is_urgent: false }).eq('id', task.id);
+          if (error) showToast('La tarea se marcó como hecha, pero no se pudo reprogramar.', 'error');
+          else await loadData();
+        }
       }
-      setCompletedIds(prev => [...prev, task.id]);
-      if (task.type === 'periodic') await loadData();
+    } catch {
+      showToast('No se pudo actualizar la tarea. Revisá la conexión.', 'error');
+    } finally {
+      setSavingTask(false);
     }
   };
 
   // ── Confirmar tratamiento ───────────────────────────────────────────────────
-  const handleConfirmTreatment = async (recordId: number) => {
-    if (!user) return;
+  const updateTreatment = async (recordId: number, confirm: boolean) => {
+    if (!user || confirmingTreatment !== null) return;
     setConfirmingTreatment(recordId);
-    await supabase.from('treatment_confirmations').insert({ record_id: recordId, date: today, user_id: user.id });
-    setConfirmedTreatments(prev => [...prev, recordId]);
-    setConfirmingTreatment(null);
-  };
-
-  const handleUnconfirmTreatment = async (recordId: number) => {
-    if (!user) return;
-    await supabase.from('treatment_confirmations').delete().eq('record_id', recordId).eq('date', today);
-    setConfirmedTreatments(prev => prev.filter(id => id !== recordId));
+    try {
+      const result = confirm
+        ? await supabase.from('treatment_confirmations').insert({ record_id: recordId, date: today, user_id: user.id })
+        : await supabase.from('treatment_confirmations').delete().eq('record_id', recordId).eq('date', today);
+      assertSupabaseOk(result);
+      setConfirmedTreatments(prev => confirm ? [...prev, recordId] : prev.filter(id => id !== recordId));
+    } catch {
+      showToast('No se pudo actualizar la aplicación del tratamiento.', 'error');
+    } finally {
+      setConfirmingTreatment(null);
+    }
   };
 
   // ── Agregar tarea extra ─────────────────────────────────────────────────────
   const handleAddExtraTask = async () => {
-    if (!extraTaskDesc.trim() || !user) return;
-    await supabase.from('tasks').insert({
-      description: extraTaskDesc.trim(), type: 'custom',
-      is_active: true, created_by: user.id, assigned_to: user.id,
-    });
-    setExtraTaskDesc('');
-    setShowExtraTask(false);
-    await loadData();
+    if (!extraTaskDesc.trim() || !user || savingExtraTask) return;
+    setSavingExtraTask(true);
+    try {
+      assertSupabaseOk(await supabase.from('tasks').insert({
+        description: extraTaskDesc.trim(), type: 'custom',
+        is_active: true, created_by: user.id, assigned_to: user.id,
+      }));
+      setExtraTaskDesc('');
+      setShowExtraTask(false);
+      await loadData();
+    } catch {
+      showToast('No se pudo guardar la tarea. Conservamos la descripción.', 'error');
+    } finally {
+      setSavingExtraTask(false);
+    }
   };
 
   // ── Insumos ─────────────────────────────────────────────────────────────────
   const handleOpenBolsa = async (feedItem: StockItem) => {
-    if (!feedItem?.kg_por_bolsa || !feedItem?.bolsas_restantes || !user) return;
+    if (!feedItem?.kg_por_bolsa || !feedItem?.bolsas_restantes || !user || savingStock) return;
     setSavingStock(true);
     setConfirmStock(null);
     try {
-      await Promise.all([
+      assertSupabaseAllOk(await Promise.all([
         supabase.from('stock_items').update({
           current_quantity: Math.max(0, feedItem.current_quantity - feedItem.kg_por_bolsa),
           bolsas_restantes: Math.max(0, feedItem.bolsas_restantes - 1),
@@ -307,9 +340,12 @@ export default function Dashboard() {
           stock_item_id: feedItem.id, quantity: feedItem.kg_por_bolsa,
           movement_type: 'salida', notes: 'Bolsa abierta', user_id: user.id, date: today,
         }),
-      ]);
+      ]));
       setStockSaved(true);
       setTimeout(() => setStockSaved(false), 3000);
+      await loadData();
+    } catch {
+      showToast('No se pudo completar el movimiento. Revisá el stock antes de reintentar.', 'error');
       await loadData();
     } finally {
       setSavingStock(false);
@@ -317,18 +353,21 @@ export default function Dashboard() {
   };
 
   const handleUseItem = async (item: StockItem) => {
-    if (!user) return;
+    if (!user || savingStock) return;
     setSavingStock(true);
     setConfirmStock(null);
     try {
-      await Promise.all([
+      assertSupabaseAllOk(await Promise.all([
         supabase.from('stock_movements').insert({
           stock_item_id: item.id, quantity: 1, movement_type: 'salida', user_id: user.id, date: today,
         }),
         supabase.from('stock_items').update({ current_quantity: Math.max(0, item.current_quantity - 1) }).eq('id', item.id),
-      ]);
+      ]));
       setStockSaved(true);
       setTimeout(() => setStockSaved(false), 3000);
+      await loadData();
+    } catch {
+      showToast('No se pudo completar el movimiento. Revisá el stock antes de reintentar.', 'error');
       await loadData();
     } finally {
       setSavingStock(false);
@@ -346,6 +385,19 @@ export default function Dashboard() {
   );
 
   if (!profile) return null;
+
+  if (loadFailed && !hasData) return (
+    <div className="min-h-screen bg-gray-50">
+      <Header userName={profile.full_name} role={profile.role} />
+      <div className="card max-w-xl mx-4 sm:mx-auto mt-6 space-y-3" role="alert">
+        <p>No se pudieron cargar los pendientes de hoy.</p>
+        <div className="flex flex-wrap gap-2">
+          <button className="btn-secondary" onClick={loadData}>Reintentar</button>
+          <Link href="/dashboard/huevos" className="btn-primary">Registrar recolección</Link>
+        </div>
+      </div>
+    </div>
+  );
 
   const manualDailyTasks = dailyTasks.filter(t => !isEggWorkflowTask(t));
   const manualPeriodicTasks = periodicTasks.filter(t => !isEggWorkflowTask(t));
@@ -376,31 +428,31 @@ export default function Dashboard() {
     activeTreatments.every(t => confirmedTreatments.includes(t.id));
   const afterRecollectionAlertHour = now.getHours() >= 18;
 
-  const TaskItem = ({ task }: { task: Task }) => {
+  const renderTaskItem = (task: Task) => {
     const isDone = completedIds.includes(task.id);
     const overdue = task.type === 'periodic' && isOverdue(task, today);
     const showUrgent = overdue && !isDone;
 
     return (
-      <div onClick={() => toggleTask(task)}
-        className={`flex items-center gap-4 p-4 rounded-2xl border cursor-pointer transition-all active:scale-[0.99]
+      <button key={task.id} type="button" aria-pressed={isDone} disabled={savingTask} onClick={() => toggleTask(task)}
+        className={`flex w-full text-left items-center gap-4 p-4 rounded-2xl border cursor-pointer transition-all active:scale-[0.99]
           ${isDone ? 'bg-gray-50 border-gray-100'
             : showUrgent ? 'bg-red-50 border-red-200 hover:border-red-300'
             : 'bg-white border-gray-200 hover:border-yellow-300'}`}>
-        <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition-all
+        <span aria-hidden className={`w-6 h-6 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition-all
           ${isDone ? 'bg-yellow-400 border-yellow-400' : showUrgent ? 'border-red-400' : 'border-gray-300'}`}>
           {isDone && <svg viewBox="0 0 12 12" className="w-3 h-3"><polyline points="2,6 5,9 10,3" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" /></svg>}
-        </div>
-        <div className="flex-1">
+        </span>
+        <span className="flex-1">
           <span className={`text-base ${isDone ? 'line-through text-gray-400' : showUrgent ? 'text-red-700 font-semibold' : 'text-gray-800'}`}>
             {task.description}
           </span>
           {task.type === 'periodic' && task.frequency_days && (
-            <p className="text-xs text-gray-400 mt-0.5">Cada {task.frequency_days} días</p>
+            <span className="block text-xs text-gray-400 mt-0.5">Cada {task.frequency_days} días</span>
           )}
-        </div>
+        </span>
         {showUrgent && <span className="badge-urgent shrink-0">Urgente</span>}
-      </div>
+      </button>
     );
   };
 
@@ -469,8 +521,10 @@ export default function Dashboard() {
   return (
     <div className="min-h-screen bg-gray-50">
       <Header userName={profile.full_name} role={profile.role} />
+      <ToastViewport toast={toast} onClose={hideToast} />
 
       <div className="max-w-xl mx-auto px-4 py-6 space-y-6">
+        {loadFailed && <p className="card text-sm text-amber-800" role="alert">No pudimos actualizar los datos. <button className="underline" onClick={loadData}>Reintentar</button></p>}
 
         {/* Progreso del día */}
         <div className="bg-white rounded-2xl border border-gray-200 p-4 flex items-center gap-4">
@@ -495,7 +549,7 @@ export default function Dashboard() {
           </div>
           <div className="space-y-2">
             {renderEggSystemItem()}
-            {manualDailyTasks.map(t => <TaskItem key={t.id} task={t} />)}
+            {manualDailyTasks.map(renderTaskItem)}
           </div>
           {hiddenEggTasks > 0 && (
             <p className="text-[11px] text-gray-400 mt-2">
@@ -565,15 +619,16 @@ export default function Dashboard() {
                     {/* Confirmación */}
                     {confirmed ? (
                       <button
-                        onClick={() => handleUnconfirmTreatment(t.id)}
+                        onClick={() => updateTreatment(t.id, false)}
+                        disabled={confirmingTreatment !== null}
                         className="w-full py-3 rounded-xl bg-green-500 text-white font-bold text-sm flex items-center justify-center gap-2 hover:bg-green-600 transition-colors"
                       >
                         <Check className="w-4 h-4" /> Aplicado — tocar para desmarcar
                       </button>
                     ) : (
                       <button
-                        onClick={() => handleConfirmTreatment(t.id)}
-                        disabled={confirmingTreatment === t.id}
+                        onClick={() => updateTreatment(t.id, true)}
+                        disabled={confirmingTreatment !== null}
                         className="w-full py-3 rounded-xl bg-blue-500 hover:bg-blue-600 text-white font-bold text-sm flex items-center justify-center gap-2 transition-colors disabled:opacity-60"
                       >
                         <FlaskConical className="w-4 h-4" />
@@ -594,7 +649,7 @@ export default function Dashboard() {
               <AlertTriangle className="w-4 h-4 text-orange-400" />
               <h3 className="font-semibold text-gray-700 text-sm uppercase tracking-wide">Tareas periódicas</h3>
             </div>
-            <div className="space-y-2">{manualPeriodicTasks.map(t => <TaskItem key={t.id} task={t} />)}</div>
+            <div className="space-y-2">{manualPeriodicTasks.map(renderTaskItem)}</div>
           </div>
         )}
 
@@ -605,7 +660,7 @@ export default function Dashboard() {
               <ClipboardList className="w-4 h-4 text-blue-400" />
               <h3 className="font-semibold text-gray-700 text-sm uppercase tracking-wide">Tareas asignadas</h3>
             </div>
-            <div className="space-y-2">{manualCustomTasks.map(t => <TaskItem key={t.id} task={t} />)}</div>
+            <div className="space-y-2">{manualCustomTasks.map(renderTaskItem)}</div>
           </div>
         )}
 
@@ -622,7 +677,7 @@ export default function Dashboard() {
               <input className="input-base" placeholder="Descripción de la tarea..."
                 value={extraTaskDesc} onChange={e => setExtraTaskDesc(e.target.value)} autoFocus />
               <div className="flex gap-2">
-                <button onClick={handleAddExtraTask} className="btn-primary flex-1 py-2 text-sm">Agregar</button>
+                <button onClick={handleAddExtraTask} disabled={savingExtraTask} className="btn-primary flex-1 py-2 text-sm">{savingExtraTask ? 'Guardando…' : 'Agregar'}</button>
                 <button onClick={() => setShowExtraTask(false)} className="btn-secondary px-3 py-2"><X className="w-4 h-4" /></button>
               </div>
             </div>

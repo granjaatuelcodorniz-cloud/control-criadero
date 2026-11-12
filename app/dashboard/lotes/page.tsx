@@ -406,19 +406,22 @@ export default function LotesColaboradora() {
   const { toast, showToast, hideToast } = useToast();
 
   const loadData = useCallback(async () => {
+    if (!navigator.onLine) return;
     try {
       const [lotsRes, slotsRes] = await Promise.all([
         supabase.from('lots').select('*').eq('status', 'activo').order('start_date', { ascending: false }),
         supabase.from('cage_slots').select('*'),
       ]);
+      assertSupabaseAllOk([lotsRes, slotsRes]);
       if (lotsRes.data) setLots(lotsRes.data);
       if (slotsRes.data) setSlots(slotsRes.data);
     } catch (error) {
       console.error('Error cargando lotes:', error);
+      showToast('No se pudieron actualizar los lotes.', 'error');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [showToast]);
 
   useEffect(() => {
     if (authLoading) return;

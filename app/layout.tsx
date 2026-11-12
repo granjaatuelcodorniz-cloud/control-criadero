@@ -35,9 +35,9 @@ export default function RootLayout({
         <AuthProvider>
           {children}
           <BottomNav />
+          <SyncManager />
         </AuthProvider>
         <ServiceWorkerRegister />
-        <SyncManager />
       </body>
     </html>
   );
