@@ -551,21 +551,24 @@ export default function Lotes() {
   const { toast, showToast, hideToast } = useToast();
 
   const loadData = useCallback(async () => {
+    if (!navigator.onLine) return;
     try {
       const [lotsRes, slotsRes, lossesRes] = await Promise.all([
         supabase.from('lots').select('*').order('start_date', { ascending: false }),
         supabase.from('cage_slots').select('*'),
         supabase.from('lot_losses').select('*').order('date', { ascending: false }),
       ]);
+      assertSupabaseAllOk([lotsRes, slotsRes, lossesRes]);
       if (lotsRes.data) setLots(lotsRes.data);
       if (slotsRes.data) setSlots(slotsRes.data);
       if (lossesRes.data) setLosses(lossesRes.data);
     } catch (error) {
       console.error('Error cargando datos:', error);
+      showToast('No se pudieron actualizar los lotes.', 'error');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [showToast]);
 
   useEffect(() => {
     if (authLoading) return;

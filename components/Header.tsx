@@ -1,9 +1,9 @@
 'use client';
 
 import Image from 'next/image';
-import Link from 'next/link';
+import Link from '@/components/AppLink';
 import { LogOut } from 'lucide-react';
-// 1. Importamos el hook del contexto
+import { useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 
 type Props = {
@@ -14,14 +14,15 @@ type Props = {
 };
 
 export default function Header({ userName, role, backHref, backLabel }: Props) {
-  // 2. Extraemos signOut del contexto
   const { signOut } = useAuth();
+  const [logoutError, setLogoutError] = useState('');
 
   const handleLogout = async () => {
     try {
+      setLogoutError('');
       await signOut();
     } catch (error) {
-      console.error('Error al cerrar sesión:', error);
+      setLogoutError(error instanceof Error ? error.message : 'No se pudo cerrar sesión.');
     }
   };
 
@@ -39,6 +40,7 @@ export default function Header({ userName, role, backHref, backLabel }: Props) {
               alt="Granja Atuel"
               width={120}
               height={40}
+              unoptimized
               className="h-9 w-auto"
             />
           )}
@@ -58,6 +60,7 @@ export default function Header({ userName, role, backHref, backLabel }: Props) {
           </button>
         </div>
       </div>
+      {logoutError && <p role="alert" className="px-4 pb-2 text-center text-sm text-amber-800">{logoutError}</p>}
     </header>
   );
 }

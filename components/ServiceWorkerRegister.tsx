@@ -9,15 +9,20 @@ export default function ServiceWorkerRegister() {
     if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return;
 
     const register = () => {
-      navigator.serviceWorker.register('/sw.js').catch(() => {
-        // Si falla el registro, la app sigue funcionando online normalmente.
+      const build = encodeURIComponent(process.env.NEXT_PUBLIC_OFFLINE_BUILD ?? 'initial');
+      void navigator.serviceWorker.register(`/sw.js?build=${build}`, { updateViaCache: 'none' }).catch(() => {
+        // Si falla el registro, la app sigue funcionando con conexión.
       });
     };
 
     if (document.readyState === 'complete') register();
     else window.addEventListener('load', register, { once: true });
 
-    return () => window.removeEventListener('load', register);
+    window.addEventListener('online', register);
+    return () => {
+      window.removeEventListener('load', register);
+      window.removeEventListener('online', register);
+    };
   }, []);
 
   return null;

@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { ToastViewport, useToast } from '@/components/Feedback';
 import { assertSupabaseAllOk, assertSupabaseOk, getErrorMessage } from '@/lib/supabase-ops';
+import { getToday } from '@/lib/date';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -186,10 +187,10 @@ export default function Stock() {
   const [showFeedForm, setShowFeedForm] = useState<number | null>(null);
   const [feedKg, setFeedKg] = useState('');
   const [feedBolsas, setFeedBolsas] = useState('');
-  const [feedDate, setFeedDate] = useState(new Date().toISOString().split('T')[0]);
+  const [feedDate, setFeedDate] = useState(getToday);
   const [showCountForm, setShowCountForm] = useState<number | null>(null);
   const [countBolsas, setCountBolsas] = useState('');
-  const [countDate, setCountDate] = useState(new Date().toISOString().split('T')[0]);
+  const [countDate, setCountDate] = useState(getToday);
 
   const [filterItemId, setFilterItemId] = useState<number | 'all'>('all');
 
@@ -200,19 +201,22 @@ export default function Stock() {
   const flash = (message = 'Stock actualizado') => showToast(message);
 
   const loadData = useCallback(async () => {
+    if (!navigator.onLine) return;
     try {
       const [itemsRes, movRes] = await Promise.all([
         supabase.from('stock_items').select('*').order('name'),
         supabase.from('stock_movements').select('*').order('date', { ascending: false }).limit(40),
       ]);
+      assertSupabaseAllOk([itemsRes, movRes]);
       if (itemsRes.data) setItems(itemsRes.data);
       if (movRes.data) setMovements(movRes.data);
     } catch (error) {
       console.error('Error cargando stock:', error);
+      showToast('No se pudo actualizar el inventario.', 'error');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [showToast]);
 
   useEffect(() => {
     if (authLoading) return;
@@ -239,7 +243,7 @@ export default function Stock() {
           movement_type: 'salida',
           notes: 'Bolsa abierta',
           user_id: user.id,
-          date: new Date().toISOString().split('T')[0],
+          date: getToday(),
         }),
       ]);
       assertSupabaseAllOk(results, 'No se pudo abrir la bolsa.');
@@ -403,7 +407,7 @@ export default function Stock() {
           movement_type: type,
           notes: notes || null,
           user_id: user.id,
-          date: new Date().toISOString().split('T')[0],
+          date: getToday(),
         }),
       ]);
       assertSupabaseAllOk(results, 'No se pudo ajustar el stock.');

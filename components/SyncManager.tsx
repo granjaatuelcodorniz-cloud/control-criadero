@@ -1,44 +1,83 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { flushQueue } from '@/lib/offline-sync';
-import { count, QUEUE_EVENT } from '@/lib/offline-queue';
+import { usePathname } from 'next/navigation';
+import { useAuth } from '@/contexts/AuthContext';
+import { useOnlineStatus } from '@/lib/connection';
+import { QUEUE_EVENT } from '@/lib/offline-queue';
+import { flushQueue, getPendingRecolecciones } from '@/lib/offline-sync';
 
-// Sincroniza la cola offline al cargar, al volver la señal y cada 30s.
-// Muestra un chip flotante mientras haya cargas sin sincronizar.
 export default function SyncManager() {
-  const [pending, setPending] = useState(0);
+  const { user, profile } = useAuth();
+  const userId = user?.id;
+  const pathname = usePathname();
+  const online = useOnlineStatus();
+  const [status, setStatus] = useState<{ userId: string; pending: number; blocked: boolean } | null>(null);
 
   useEffect(() => {
+    if (!userId) return;
     let mounted = true;
-    const refresh = async () => {
-      const c = await count().catch(() => 0);
-      if (mounted) setPending(c);
-    };
-    const doFlush = async () => { await flushQueue(); await refresh(); };
+    let running = false;
+    let requested = false;
 
-    refresh();
-    doFlush();
+    async function run() {
+      if (!userId || !mounted) return;
+      if (running) {
+        requested = true;
+        return;
+      }
+      running = true;
+      try {
+        do {
+          requested = false;
+          const pending = (await getPendingRecolecciones(userId)).length;
+          if (!mounted) return;
+          setStatus(previous => ({ userId, pending, blocked: previous?.userId === userId && previous.blocked }));
+          if (!navigator.onLine || pending === 0) continue;
+          const result = await flushQueue(userId);
+          const remaining = (await getPendingRecolecciones(userId)).length;
+          if (mounted) setStatus({ userId, pending: remaining, blocked: result === 'blocked' });
+        } while (requested && mounted);
+      } catch (error) {
+        console.error('No se pudo consultar la sincronización local:', error);
+      } finally {
+        running = false;
+      }
+    }
 
-    const onOnline = () => { doFlush(); };
-    window.addEventListener('online', onOnline);
-    window.addEventListener(QUEUE_EVENT, refresh);
-    const interval = setInterval(doFlush, 30000);
-
+    const onVisible = () => { if (document.visibilityState === 'visible') void run(); };
+    void run();
+    window.addEventListener('online', run);
+    window.addEventListener('pageshow', run);
+    window.addEventListener(QUEUE_EVENT, run);
+    document.addEventListener('visibilitychange', onVisible);
+    const interval = setInterval(onVisible, 30000);
     return () => {
       mounted = false;
-      window.removeEventListener('online', onOnline);
-      window.removeEventListener(QUEUE_EVENT, refresh);
+      window.removeEventListener('online', run);
+      window.removeEventListener('pageshow', run);
+      window.removeEventListener(QUEUE_EVENT, run);
+      document.removeEventListener('visibilitychange', onVisible);
       clearInterval(interval);
     };
-  }, []);
+  }, [userId]);
 
-  if (pending <= 0) return null;
+  const pending = status?.userId === userId ? status?.pending ?? 0 : 0;
+  const blocked = !!status?.blocked && status.userId === userId && pending > 0;
+  if (!profile || !pathname.startsWith('/dashboard') || (online && pending === 0)) return null;
 
   return (
-    <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-40 bg-amber-100 border border-amber-300 text-amber-800 text-xs font-medium px-3 py-1.5 rounded-full shadow-lg flex items-center gap-1.5">
-      <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
-      {pending} pendiente{pending > 1 ? 's' : ''} de sincronizar
+    <div role="status" className="fixed bottom-20 inset-x-4 z-40 mx-auto w-fit max-w-[calc(100%-2rem)] rounded-2xl border border-amber-300 bg-amber-100 px-3 py-1.5 text-center text-xs font-medium text-amber-900 shadow-lg">
+      {!online && <span>Sin conexión{pending > 0 ? ' · ' : ''}</span>}
+      {pending > 0 && <span>{pending} pendiente{pending > 1 ? 's' : ''} de sincronizar</span>}
+      {blocked && online && (
+        <div>
+          <span>Hay recolecciones que requieren revisión.</span>{' '}
+          <button type="button" className="font-bold underline" onClick={() => window.dispatchEvent(new Event(QUEUE_EVENT))}>
+            Reintentar
+          </button>
+        </div>
+      )}
     </div>
   );
 }

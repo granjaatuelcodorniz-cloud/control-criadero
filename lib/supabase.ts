@@ -16,14 +16,18 @@ function fetchConTimeout(input: RequestInfo | URL, init?: RequestInit): Promise<
 
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+  const abort = () => controller.abort()
 
   // Respetar un signal externo (p. ej. el de supabase-js .abortSignal()).
   if (init?.signal) {
     if (init.signal.aborted) controller.abort()
-    else init.signal.addEventListener('abort', () => controller.abort(), { once: true })
+    else init.signal.addEventListener('abort', abort, { once: true })
   }
 
-  return fetch(input, { ...init, signal: controller.signal }).finally(() => clearTimeout(timeout))
+  return fetch(input, { ...init, signal: controller.signal }).finally(() => {
+    clearTimeout(timeout)
+    init?.signal?.removeEventListener('abort', abort)
+  })
 }
 
 export const createClient = () =>

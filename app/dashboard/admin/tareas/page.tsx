@@ -8,7 +8,8 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useVisibilityReload } from '@/lib/visibility-reload';
 import { useRouter } from 'next/navigation';
 import { ConfirmDialog, ToastViewport, useToast } from '@/components/Feedback';
-import { assertSupabaseOk, getErrorMessage } from '@/lib/supabase-ops';
+import { assertSupabaseAllOk, assertSupabaseOk, getErrorMessage } from '@/lib/supabase-ops';
+import { getToday } from '@/lib/date';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -60,15 +61,17 @@ export default function Tareas() {
   const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
   const { toast, showToast, hideToast } = useToast();
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = getToday();
 
   const loadData = useCallback(async () => {
+    if (!navigator.onLine) return;
     try {
       const [tasksRes, collabRes, compRes] = await Promise.all([
         supabase.from('tasks').select('*').eq('is_active', true).order('type').order('id'),
         supabase.from('profiles').select('id, full_name').eq('role', 'collaborator'),
         supabase.from('task_completions').select('task_id, date').eq('date', today),
       ]);
+      assertSupabaseAllOk([tasksRes, collabRes, compRes]);
 
       if (tasksRes.data) setTasks(tasksRes.data);
       if (collabRes.data) {
@@ -76,10 +79,12 @@ export default function Tareas() {
         if (collabRes.data.length > 0) setNewAssigned(prev => prev || collabRes.data[0].id);
       }
       if (compRes.data) setCompletions(compRes.data);
+    } catch {
+      showToast('No se pudieron actualizar las tareas.', 'error');
     } finally {
       setLoading(false);
     }
-  }, [today]);
+  }, [today, showToast]);
 
   useEffect(() => {
     if (authLoading) return;

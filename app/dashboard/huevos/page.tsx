@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useId } from 'react';
 import { supabase } from '@/lib/supabase';
 import Header from '@/components/Header';
 import { ChevronDown, AlertCircle, AlertTriangle, Egg, PackageCheck } from 'lucide-react';
@@ -8,9 +8,12 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useVisibilityReload } from '@/lib/visibility-reload';
 import { useRouter } from 'next/navigation';
 import { ToastViewport, useToast } from '@/components/Feedback';
-import { assertSupabaseOk, getErrorMessage } from '@/lib/supabase-ops';
+import { assertSupabaseAllOk, assertSupabaseOk, getErrorMessage } from '@/lib/supabase-ops';
 import { getToday, toDateStr } from '@/lib/date';
-import { guardarRecoleccion } from '@/lib/offline-sync';
+import { getPendingRecolecciones, guardarRecoleccion, RECOLECCION_SYNCED } from '@/lib/offline-sync';
+import { QUEUE_EVENT } from '@/lib/offline-queue';
+import { useOnlineStatus } from '@/lib/connection';
+import { procesarBandejaFertil } from '@/lib/egg-operations';
 
 // ─── Counter ──────────────────────────────────────────────────────────────────
 
@@ -28,6 +31,7 @@ function Counter({
   max?: number;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const inputId = useId();
   const [focused, setFocused] = useState(false);
 
   const clamp = (v: number) => {
@@ -57,7 +61,7 @@ function Counter({
   return (
     <div className="flex flex-col gap-1.5">
       <div>
-        <label className="text-sm font-medium text-gray-600">{label}</label>
+        <label htmlFor={inputId} className="text-sm font-medium text-gray-600">{label}</label>
         {sublabel && <p className="text-xs text-gray-400 mt-0.5">{sublabel}</p>}
       </div>
       <div className={`bg-gray-50 rounded-2xl border flex items-center px-2 py-2 gap-2 transition-colors overflow-hidden
@@ -69,6 +73,7 @@ function Counter({
         >−</button>
 
         <input
+          id={inputId}
           ref={inputRef}
           type="number"
           inputMode="numeric"
@@ -198,7 +203,7 @@ function EmpaqueCard({
   const capExcedido = avesActivas > 0 && huevosDia > Math.round(avesActivas * TOPE_POSTURA);
 
   const handleSave = async () => {
-    if (!valido || !user) return;
+    if (!valido || !user || saving || !navigator.onLine) return;
     setSaving(true);
     let ok = false;
     try {
@@ -219,6 +224,9 @@ function EmpaqueCard({
     }
     if (!ok) return;
     const quedan = restantes - (bandejas ?? 0);
+    setBandejas(Math.max(0, quedan));
+    setDocenas(null);
+    setRotos(null);
     showToast(quedan <= 0 ? 'Empaque del día completo' : `Empaque guardado · faltan ${quedan} bandejas`);
     await onSaved();
   };
@@ -285,6 +293,7 @@ function EmpaqueCard({
 export default function RegistroHuevos() {
   const { user, profile, loading: authLoading } = useAuth();
   const router = useRouter();
+  const online = useOnlineStatus();
 
   const [activeTab, setActiveTab] = useState<'recoleccion' | 'empaque' | 'fertiles'>('recoleccion');
 
@@ -293,7 +302,8 @@ export default function RegistroHuevos() {
   const [bandConsumo, setBandConsumo] = useState<number | null>(null);
   const [bandFertiles, setBandFertiles] = useState<number | null>(null);
   const [notasRec, setNotasRec] = useState('');
-  const [yaHayRec, setYaHayRec] = useState(false);
+  const [existingDates, setExistingDates] = useState<string[]>([]);
+  const [pendingDates, setPendingDates] = useState<string[]>([]);
 
   // ── Blindajes: aves activas, días pendientes y repartidor ──
   const [avesActivas, setAvesActivas] = useState(0);
@@ -307,39 +317,47 @@ export default function RegistroHuevos() {
 
   // ── Empaque de consumo ──
   const [consumoDays, setConsumoDays] = useState<ConsumoDay[]>([]);
+  const [empaqueState, setEmpaqueState] = useState<'loading' | 'ready' | 'error'>('loading');
 
   // ── Fértiles (owner) ──
   const [pendingBatches, setPendingBatches] = useState<FertileBatch[]>([]);
+  const [fertilesState, setFertilesState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [processingBatch, setProcessingBatch] = useState<number | null>(null);
   const [batchDocenas, setBatchDocenas] = useState('');
   const [batchDescarte, setBatchDescarte] = useState('');
   const [savingBatch, setSavingBatch] = useState(false);
 
   const [loading, setLoading] = useState(false);
+  const savingRec = useRef(false);
   const { toast, showToast, hideToast } = useToast();
 
   const checkExistingRec = useCallback(async (date: string) => {
-    if (!user) return;
-    const { data } = await supabase
+    if (!user || !navigator.onLine) return;
+    const { data, error } = await supabase
       .from('daily_records')
       .select('id')
       .eq('date', date)
       .limit(1)
       .maybeSingle();
-    setYaHayRec(!!data);
+    if (error) return;
+    setExistingDates(previous => data ? [...new Set([...previous, date])] : previous.filter(day => day !== date));
   }, [user]);
 
   // Agrupa recolecciones y empaques por día para saber qué falta empacar.
   const loadConsumoDays = useCallback(async () => {
-    if (!user) return;
-    const desde = new Date();
-    desde.setDate(desde.getDate() - 14);
-    const desdeStr = desde.toISOString().split('T')[0];
+    if (!user || !navigator.onLine) return;
+    const desdeStr = diasAtras(14);
 
     const [recRes, empRes] = await Promise.all([
       supabase.from('daily_records').select('date, bandejas_consumo').gte('date', desdeStr),
       supabase.from('consumo_empaque').select('date, bandejas, docenas, rotos').gte('date', desdeStr),
     ]);
+    try {
+      assertSupabaseAllOk([recRes, empRes]);
+    } catch {
+      setEmpaqueState('error');
+      return;
+    }
 
     const map = new Map<string, ConsumoDay>();
     const get = (date: string) => {
@@ -360,27 +378,37 @@ export default function RegistroHuevos() {
       .filter(d => d.recolectadas - d.empacadas > 0)
       .sort((a, b) => b.date.localeCompare(a.date));
     setConsumoDays(pend);
+    setEmpaqueState('ready');
   }, [user]);
 
   const loadPendingBatches = useCallback(async () => {
-    if (!user) return;
-    const { data } = await supabase
+    if (!user || !navigator.onLine) return;
+    const { data, error } = await supabase
       .from('fertile_batches')
       .select('id, date, status')
       .eq('status', 'pendiente')
       .order('date');
-    if (data) setPendingBatches(data);
+    if (error) setFertilesState('error');
+    else {
+      setPendingBatches(data ?? []);
+      setFertilesState('ready');
+    }
   }, [user]);
 
   const loadAves = useCallback(async () => {
+    if (!navigator.onLine) return;
     const { data } = await supabase.from('cage_slots').select('quantity');
     if (data) setAvesActivas(data.reduce((s, r) => s + (r.quantity ?? 0), 0));
   }, []);
 
   // Días de los últimos 3 sin ninguna recolección cargada (para avisar de días pendientes).
   const loadPendientes = useCallback(async () => {
-    if (!user) return;
-    const { data } = await supabase.from('daily_records').select('date').gte('date', diasAtras(3));
+    if (!user || !navigator.onLine) return;
+    const { data, error } = await supabase.from('daily_records').select('date').gte('date', diasAtras(3));
+    if (error) {
+      setDiasPendientes([]);
+      return;
+    }
     const conReco = new Set((data ?? []).map(r => r.date));
     const hoy = getToday();
     const pend: string[] = [];
@@ -392,13 +420,11 @@ export default function RegistroHuevos() {
   }, [user]);
 
   // Al volver de segundo plano, refresca lo que está visible en la pestaña actual.
-  const reloadActive = useCallback(() => {
+  const reloadActive = useCallback(async () => {
     if (!user) return;
-    void loadAves();
-    void checkExistingRec(dateRec);
-    if (activeTab === 'recoleccion') void loadPendientes();
-    else if (activeTab === 'empaque') void loadConsumoDays();
-    else if (activeTab === 'fertiles') void loadPendingBatches();
+    const loadTab = activeTab === 'recoleccion' ? loadPendientes
+      : activeTab === 'empaque' ? loadConsumoDays : loadPendingBatches;
+    await Promise.all([loadAves(), checkExistingRec(dateRec), loadTab()]);
   }, [user, activeTab, dateRec, loadAves, checkExistingRec, loadPendientes, loadConsumoDays, loadPendingBatches]);
 
   useVisibilityReload(reloadActive);
@@ -412,6 +438,24 @@ export default function RegistroHuevos() {
   useEffect(() => { if (activeTab === 'recoleccion' && user) loadPendientes(); }, [activeTab, user, loadPendientes]);
   useEffect(() => { if (activeTab === 'empaque' && user) loadConsumoDays(); }, [activeTab, user, loadConsumoDays]);
   useEffect(() => { if (activeTab === 'fertiles' && user) loadPendingBatches(); }, [activeTab, user, loadPendingBatches]);
+
+  useEffect(() => {
+    if (!user) return;
+    let mounted = true;
+    const update = async () => {
+      const pending = await getPendingRecolecciones(user.id).catch(() => []);
+      if (mounted) setPendingDates(pending.map(item => item.payload.date));
+    };
+    void update();
+    window.addEventListener(QUEUE_EVENT, update);
+    return () => { mounted = false; window.removeEventListener(QUEUE_EVENT, update); };
+  }, [user]);
+
+  useEffect(() => {
+    const reload = () => { void reloadActive(); };
+    window.addEventListener(RECOLECCION_SYNCED, reload);
+    return () => window.removeEventListener(RECOLECCION_SYNCED, reload);
+  }, [reloadActive]);
 
   if (authLoading) return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center">
@@ -430,15 +474,16 @@ export default function RegistroHuevos() {
 
   // ── Guardar recolección ──
   const recValido = (bandConsumo ?? 0) > 0 || (bandFertiles ?? 0) > 0;
-  const pendientesVisibles = diasPendientes.filter(d => !descartados.includes(d));
+  const yaHayRec = existingDates.includes(dateRec) || pendingDates.includes(dateRec);
+  const pendientesVisibles = online ? diasPendientes.filter(d => !descartados.includes(d) && !pendingDates.includes(d)) : [];
   const handleSubmitRec = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!recValido || !user) return;
+    if (!recValido || !user || savingRec.current) return;
+    savingRec.current = true;
     setLoading(true);
     const nFert = bandFertiles ?? 0;
-    let modo: 'online' | 'offline' | null = null;
+    let modo: 'online' | 'pending' | null = null;
     try {
-      // Guarda online; si no hay señal, queda en la cola del celular y se sincroniza después.
       modo = await guardarRecoleccion({
         date: dateRec,
         user_id: user.id,
@@ -450,24 +495,24 @@ export default function RegistroHuevos() {
     } catch (error) {
       showToast(getErrorMessage(error, 'No se pudo guardar la recolección.'), 'error');
     } finally {
+      savingRec.current = false;
       setLoading(false);
     }
     if (!modo) return;
-    showToast(modo === 'offline'
-      ? 'Guardado en el celular · se sincroniza al volver la señal'
+    showToast(modo === 'pending'
+      ? 'Recolección guardada en este dispositivo'
       : 'Recolección guardada' + (nFert > 0 ? ` · ${nFert} bandeja${nFert > 1 ? 's' : ''} fértil${nFert > 1 ? 'es' : ''} pendiente${nFert > 1 ? 's' : ''}` : ''));
     setBandConsumo(null);
     setBandFertiles(null);
     setNotasRec('');
     setDateRec(getToday());
-    setYaHayRec(true);
-    // La recarga va aparte para no dejar el botón colgado si tarda.
-    void loadPendientes();
+    setExistingDates(previous => [...new Set([...previous, dateRec])]);
+    if (modo === 'online') void loadPendientes();
   };
 
   // ── Repartir producción mezclada entre el día pendiente y hoy (mitad y mitad) ──
   const handleReparto = async () => {
-    if (!user || !repartoDay) return;
+    if (!user || !repartoDay || savingReparto || !navigator.onLine) return;
     const totalB = repBandejas ?? 0;
     const totalD = repDocenas ?? 0;
     const totalR = repRotos ?? 0;
@@ -518,25 +563,10 @@ export default function RegistroHuevos() {
 
   // ── Procesar bandeja fértil ──
   const handleProcessBatch = async (batch: FertileBatch) => {
-    if (!batchDocenas || !user) return;
+    if (!batchDocenas || !user || savingBatch || !navigator.onLine) return;
     setSavingBatch(true);
     try {
-      assertSupabaseOk(await supabase.from('fertile_batches').update({
-        status: 'procesada',
-        docenas_seleccionadas: Number(batchDocenas),
-        descarte: Number(batchDescarte) || 0,
-        processed_at: getToday(),
-        processed_by: user.id,
-      }).eq('id', batch.id));
-
-      assertSupabaseOk(await supabase.from('fertile_records').insert({
-        date: batch.date,
-        user_id: user.id,
-        bandejas_procesadas: 1,
-        docenas_seleccionadas: Number(batchDocenas),
-        descarte: Number(batchDescarte) || 0,
-        registered_at: new Date().toTimeString().split(' ')[0],
-      }));
+      await procesarBandejaFertil(batch.id, user.id, Number(batchDocenas), Number(batchDescarte) || 0);
 
       setProcessingBatch(null);
       setBatchDocenas('');
@@ -565,6 +595,10 @@ export default function RegistroHuevos() {
         <div className="mb-6">
           <h2 className="text-2xl font-bold text-gray-900">Registro de huevos</h2>
         </div>
+
+        {!online && (activeTab !== 'recoleccion' || repartoDay) && (
+          <p className="card mb-4 text-sm text-amber-800" role="status">Necesitás conexión para guardar en esta sección. Las recolecciones individuales se pueden cargar sin señal.</p>
+        )}
 
         <div className="flex gap-2 mb-6">
           {tabs.map(tab => (
@@ -619,7 +653,7 @@ export default function RegistroHuevos() {
               <div className="flex gap-2">
                 <button
                   onClick={handleReparto}
-                  disabled={savingReparto || ((repBandejas ?? 0) <= 0 && (repDocenas ?? 0) <= 0)}
+                  disabled={!online || savingReparto || ((repBandejas ?? 0) <= 0 && (repDocenas ?? 0) <= 0 && (repRotos ?? 0) <= 0)}
                   className="btn-primary flex-1 py-3.5 text-base disabled:opacity-40 disabled:cursor-not-allowed">
                   {savingReparto ? 'Guardando...' : 'Guardar los dos días'}
                 </button>
@@ -700,8 +734,10 @@ export default function RegistroHuevos() {
 
         {/* ── Empaque de consumo ── */}
         {activeTab === 'empaque' && (
-          <div className="space-y-4">
-            {consumoDays.length === 0 ? (
+          <div className="space-y-4" hidden={!online}>
+            {empaqueState === 'error' && <p className="card text-sm text-red-700" role="alert">No se pudo actualizar el empaque. <button className="underline" onClick={loadConsumoDays}>Reintentar</button></p>}
+            {empaqueState === 'loading' && <p className="card text-sm text-gray-500" role="status">Cargando empaque…</p>}
+            {consumoDays.length === 0 && empaqueState === 'ready' ? (
               <div className="card text-center py-10">
                 <PackageCheck className="w-8 h-8 text-gray-300 mx-auto mb-2" />
                 <p className="text-gray-400 font-medium">No hay bandejas para empacar</p>
@@ -717,8 +753,10 @@ export default function RegistroHuevos() {
 
         {/* ── Fértiles (owner) — bandejas pendientes ── */}
         {activeTab === 'fertiles' && (
-          <div className="space-y-4">
-            {pendingBatches.length === 0 ? (
+          <div className="space-y-4" hidden={!online}>
+            {fertilesState === 'error' && <p className="card text-sm text-red-700" role="alert">No se pudieron actualizar las bandejas fértiles. <button className="underline" onClick={loadPendingBatches}>Reintentar</button></p>}
+            {fertilesState === 'loading' && <p className="card text-sm text-gray-500" role="status">Cargando bandejas fértiles…</p>}
+            {pendingBatches.length === 0 && fertilesState === 'ready' ? (
               <div className="card text-center py-10">
                 <Egg className="w-8 h-8 text-gray-300 mx-auto mb-2" />
                 <p className="text-gray-400 font-medium">No hay bandejas fértiles pendientes</p>

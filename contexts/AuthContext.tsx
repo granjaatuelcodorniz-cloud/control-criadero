@@ -1,150 +1,142 @@
 'use client';
 
-import { createContext, useCallback, useContext, useEffect, useState, useRef, useMemo } from 'react';
-import { createClient } from '@/lib/supabase';
-import { User } from '@supabase/supabase-js';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { saveProfile, loadProfile } from '@/lib/profile-cache';
+import { supabase } from '@/lib/supabase';
+import { clearActiveProfile, loadActiveProfile, loadProfile, saveProfile, type CachedProfile } from '@/lib/profile-cache';
+import { isConnectionError } from '@/lib/connection';
 
-type Profile = {
-  full_name: string;
-  role: 'owner' | 'collaborator';
-};
-
-type AuthContextType = {
-  user: User | null;
-  profile: Profile | null;
+type AuthState = {
+  user: { id: string } | null;
+  profile: CachedProfile | null;
   loading: boolean;
-  signOut: () => Promise<void>;
+  error: string | null;
 };
 
-const AuthContext = createContext<AuthContextType>({
-  user: null,
-  profile: null,
-  loading: true,
+const initialState: AuthState = { user: null, profile: null, loading: true, error: null };
+const AuthContext = createContext<AuthState & { retry: () => void; signOut: () => Promise<void> }>({
+  ...initialState,
+  retry: () => {},
   signOut: async () => {},
 });
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const supabase = useMemo(() => createClient(), []);
   const router = useRouter();
-
-  const [user, setUser] = useState<User | null>(null);
-  const [profile, setProfile] = useState<Profile | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  // Garantiza que onAuthStateChange no interfiere mientras init() corre.
-  const initialized = useRef(false);
-
-  const fetchProfile = useCallback(async (userId: string): Promise<Profile | null> => {
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('full_name, role')
-      .eq('id', userId)
-      .single();
-
-    if (!error && data) {
-      setProfile(data);
-      saveProfile(userId, data);
-      return data;
-    }
-
-    // Sin señal (o error): usar el perfil cacheado para no patear al login.
-    const cached = loadProfile(userId);
-    if (cached) {
-      setProfile(cached);
-      return cached;
-    }
-    console.error('Error cargando perfil:', error);
-    return null;
-  }, [supabase]);
-
-  const redirectByRole = useCallback((role: Profile['role']) => {
-    if (role === 'owner') {
-      router.replace('/dashboard/admin');
-    } else {
-      router.replace('/dashboard');
-    }
-  }, [router]);
+  const [state, setState] = useState(initialState);
+  const [retryCount, setRetryCount] = useState(0);
+  const retry = useCallback(() => setRetryCount(value => value + 1), []);
 
   useEffect(() => {
     let mounted = true;
+    let revision = 0;
+    let currentUserId: string | null = null;
+    let pendingAuthChange: ReturnType<typeof setTimeout> | undefined;
 
-    const init = async () => {
+    function publish(userId: string | null, profile: CachedProfile | null, loading = false, error: string | null = null) {
+      currentUserId = userId;
+      setState(previous => ({
+        user: userId ? (previous.user?.id === userId ? previous.user : { id: userId }) : null,
+        profile: profile && previous.user?.id === userId && previous.profile?.role === profile.role
+          && previous.profile.full_name === profile.full_name ? previous.profile : profile,
+        loading, error,
+      }));
+    }
+
+    function restoreOffline() {
+      const saved = loadActiveProfile();
+      publish(saved?.userId ?? null, saved?.profile ?? null);
+    }
+
+    async function loadFor(userId: string) {
+      const request = ++revision;
+      const cached = loadProfile(userId);
+      const active = loadActiveProfile();
+      if (active && active.userId !== userId) clearActiveProfile();
+      if (cached) saveProfile(userId, cached);
+      publish(userId, cached, !cached);
+
       try {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!mounted) return;
-
-        if (session?.user) {
-          setUser(session.user);
-          await fetchProfile(session.user.id);
-        }
+        const { data, error } = await supabase.from('profiles').select('full_name, role').eq('id', userId).single();
+        if (error) throw error;
+        if (!data || (data.role !== 'owner' && data.role !== 'collaborator')) throw new Error('Perfil inválido.');
+        if (!mounted || request !== revision) return;
+        saveProfile(userId, data);
+        publish(userId, data);
       } catch (error) {
-        console.error('Error iniciando sesión:', error);
+        if (!mounted || request !== revision) return;
+        if (cached && (!navigator.onLine || isConnectionError(error))) publish(userId, cached);
+        else {
+          clearActiveProfile();
+          publish(userId, null, false, 'No pudimos cargar tu perfil. Revisá la conexión e intentá de nuevo.');
+        }
+      }
+    }
+
+    async function restore() {
+      const request = ++revision;
+      if (!navigator.onLine) {
+        restoreOffline();
+        return;
+      }
+
+      const fallback = setTimeout(() => {
+        if (mounted && request === revision && loadActiveProfile()) restoreOffline();
+      }, 1500);
+      try {
+        const { data: { session }, error } = await supabase.auth.getSession();
+        if (!mounted || request !== revision) return;
+        if (session?.user) {
+          await loadFor(session.user.id);
+        } else if (!navigator.onLine || isConnectionError(error)) {
+          restoreOffline();
+        } else {
+          clearActiveProfile();
+          publish(null, null);
+        }
+      } catch {
+        if (!mounted || request !== revision) return;
+        restoreOffline();
       } finally {
-        if (mounted) {
-          initialized.current = true;
-          setLoading(false);
-        }
+        clearTimeout(fallback);
       }
-    };
+    }
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
-        if (!mounted) return;
-
-        if (event === 'SIGNED_OUT') {
-          setUser(null);
-          setProfile(null);
-          router.replace('/');
-          return;
-        }
-
-        // Ignoramos eventos hasta que init() termine.
-        if (!initialized.current) return;
-
-        if (event === 'SIGNED_IN' && session?.user) {
-          setUser(session.user);
-          const fetchedProfile = await fetchProfile(session.user.id);
-          setLoading(false);
-          if (fetchedProfile) {
-            redirectByRole(fetchedProfile.role);
-          }
-
-        } else if (event === 'TOKEN_REFRESHED') {
-          // El token se refrescó automáticamente — el usuario es el mismo.
-          // No tocamos el estado de React para evitar re-renders que
-          // disparan los useEffect de todas las páginas y causan loadings
-          // innecesarios al volver de un cambio de pestaña.
-        }
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (!mounted) return;
+      if (event === 'SIGNED_OUT') {
+        clearTimeout(pendingAuthChange);
+        revision++;
+        clearActiveProfile();
+        publish(null, null);
+      } else if (event === 'SIGNED_IN' && session?.user && session.user.id !== currentUserId) {
+        const userId = session.user.id;
+        clearTimeout(pendingAuthChange);
+        // Supabase puede mantener bloqueada la sesión hasta que termina este callback.
+        pendingAuthChange = setTimeout(() => { if (mounted && userId !== currentUserId) void loadFor(userId); }, 0);
       }
-    );
+    });
 
-    init();
-
+    const initial = setTimeout(() => { void restore(); }, 0);
+    window.addEventListener('online', restore);
     return () => {
       mounted = false;
+      clearTimeout(initial);
+      clearTimeout(pendingAuthChange);
+      window.removeEventListener('online', restore);
       subscription.unsubscribe();
     };
-  }, [supabase, router, fetchProfile, redirectByRole]);
+  }, [retryCount]);
 
-  const handleLogout = useCallback(async () => {
-    setUser(null);
-    setProfile(null);
-    await supabase.auth.signOut();
+  const signOut = useCallback(async () => {
+    if (!navigator.onLine) throw new Error('Conectate a internet para cerrar sesión.');
+    const { error } = await supabase.auth.signOut();
+    if (error) throw new Error('No se pudo cerrar sesión. Revisá la conexión e intentá de nuevo.');
+    clearActiveProfile();
     router.replace('/');
-  }, [router, supabase]);
+  }, [router]);
 
-  const value = useMemo(
-    () => ({ user, profile, loading, signOut: handleLogout }),
-    [user, profile, loading, handleLogout],
-  );
-
-  return (
-    <AuthContext.Provider value={value}>
-      {children}
-    </AuthContext.Provider>
-  );
+  const value = useMemo(() => ({ ...state, retry, signOut }), [state, retry, signOut]);
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth() {

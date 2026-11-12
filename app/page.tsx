@@ -1,8 +1,9 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { createClient } from '@/lib/supabase';
-import { loadProfile, saveProfile } from '@/lib/profile-cache';
+import { useAuth } from '@/contexts/AuthContext';
+import { useOnlineStatus } from '@/lib/connection';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 
@@ -16,18 +17,10 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [inviteEmail, setInviteEmail] = useState('');
+  const invitePending = useRef(false);
   const router = useRouter();
-
-  // Si ya hay sesión guardada (aunque esté offline), entrar directo sin pedir login.
-  // Solo si tenemos el perfil cacheado, para saber el rol y no rebotar.
-  useEffect(() => {
-    const supabase = createClient();
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (!session?.user) return;
-      const cached = loadProfile(session.user.id);
-      if (cached) router.replace(cached.role === 'owner' ? '/dashboard/admin' : '/dashboard');
-    });
-  }, [router]);
+  const { profile, loading: authLoading, error: profileError, retry } = useAuth();
+  const online = useOnlineStatus();
 
   // Detectar token de invitación en la URL (#access_token=...)
   useEffect(() => {
@@ -41,20 +34,31 @@ export default function Login() {
 
     if (accessToken && (type === 'invite' || type === 'signup')) {
       const supabase = createClient();
+      invitePending.current = true;
 
       // Establecer sesión completa con access + refresh token
       supabase.auth.setSession({
         access_token: accessToken,
         refresh_token: refreshToken || '',
-      }).then(({ data }) => {
+      }).then(({ data, error }) => {
+        invitePending.current = false;
         if (data?.user?.email) {
           setInviteEmail(data.user.email);
           setMode('set-password');
           window.history.replaceState(null, '', window.location.pathname);
+        } else if (error) {
+          setError('No pudimos abrir la invitación. Revisá el enlace y la conexión.');
         }
       });
     }
   }, []);
+
+  useEffect(() => {
+    if (mode !== 'login' || invitePending.current || authLoading || !profile) return;
+    const destination = profile.role === 'owner' ? '/dashboard/admin' : '/dashboard';
+    if (navigator.onLine) router.replace(destination);
+    else window.location.replace(destination);
+  }, [mode, authLoading, profile, router]);
 
   // ── Login normal ────────────────────────────────────────────────────────────
   const handleLogin = async (e: React.FormEvent) => {
@@ -79,19 +83,7 @@ export default function Login() {
       return;
     }
 
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('full_name, role')
-      .eq('id', data.user.id)
-      .single();
-
-    if (profile) saveProfile(data.user.id, profile);
-
-    if (profile?.role === 'owner') {
-      router.push('/dashboard/admin');
-    } else {
-      router.push('/dashboard');
-    }
+    setLoading(false);
   };
 
   // ── Setear contraseña desde invitación ──────────────────────────────────────
@@ -119,22 +111,9 @@ export default function Login() {
       return;
     }
 
-    // Contraseña seteada — redirigir según rol
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) { setLoading(false); return; }
-
-    // Crear perfil si no existe (primer acceso)
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('role')
-      .eq('id', user.id)
-      .maybeSingle();
-
-    if (profile?.role === 'owner') {
-      router.push('/dashboard/admin');
-    } else {
-      router.push('/dashboard');
-    }
+    setLoading(false);
+    setMode('login');
+    if (!profile) retry();
   };
 
   // ── Set password UI ─────────────────────────────────────────────────────────
@@ -143,7 +122,7 @@ export default function Login() {
       <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
         <div className="max-w-md w-full bg-white rounded-3xl shadow-xl p-10">
           <div className="flex justify-center mb-8">
-            <Image src="/logo.webp" alt="Granja Atuel" width={260} height={110} priority className="mx-auto" />
+            <Image src="/logo.webp" alt="Granja Atuel" width={260} height={110} priority unoptimized className="mx-auto" />
           </div>
 
           <h1 className="text-2xl font-bold text-center mb-2">Bienvenida</h1>
@@ -191,16 +170,28 @@ export default function Login() {
     );
   }
 
+  if (authLoading || profile) return (
+    <div className="min-h-screen grid place-items-center bg-gray-50" role="status">Abriendo Control Criadero…</div>
+  );
+
   // ── Login UI ────────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
       <div className="max-w-md w-full bg-white rounded-3xl shadow-xl p-10">
         <div className="flex justify-center mb-8">
-          <Image src="/logo.webp" alt="Granja Atuel" width={260} height={110} priority className="mx-auto" />
+          <Image src="/logo.webp" alt="Granja Atuel" width={260} height={110} priority unoptimized className="mx-auto" />
         </div>
 
         <h1 className="text-3xl font-bold text-center mb-2">Iniciar sesión</h1>
         <p className="text-gray-500 text-center mb-8">ControlCriadero — Granja Atuel</p>
+
+        {!online && <p className="mb-4 text-sm text-amber-800" role="status">Conectate para iniciar sesión en este dispositivo.</p>}
+        {profileError && (
+          <div className="mb-4 text-sm text-red-700" role="alert">
+            <p>{profileError}</p>
+            <button type="button" className="underline" onClick={retry}>Volver a cargar el perfil</button>
+          </div>
+        )}
 
         <form onSubmit={handleLogin} className="space-y-6">
           <input
